@@ -56,7 +56,10 @@ def read_system_ipv4_resolvers(path: str = "/etc/resolv.conf") -> tuple[str, ...
     return tuple(resolvers)
 
 
-def build_dns_resolver_allowlist(raw: str, resolv_conf_path: str = "/etc/resolv.conf") -> tuple[str, ...]:
+def build_dns_resolver_allowlist(
+    raw: str,
+    resolv_conf_path: str = "/etc/resolv.conf",
+) -> tuple[str, ...]:
     configured = parse_configured_dns_resolvers(raw)
     merged = list(configured)
     for system_resolver in read_system_ipv4_resolvers(resolv_conf_path):
