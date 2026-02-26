@@ -29,7 +29,10 @@ Common optional limits:
 - `MAX_DOWNLOAD_BYTES` (default `300000000`)
 - `PACKAGE_DENYLIST` (default `torch,tensorflow,jaxlib`)
 - `DNS_RESOLVERS` (default `1.1.1.1,8.8.8.8`)
-- `JAIL_PYTHON_NAME` (default `python3`)
+- `JAIL_PYTHON_NAME` (default `/usr/local/bin/python3`)
+- `NSJAIL_USER` (default `65534`)
+- `NSJAIL_GROUP` (default `65534`)
+- `NSJAIL_DISABLE_CLONE_NEWUSER` (default `1`)
 
 ## Deployment
 
@@ -75,11 +78,12 @@ the nsjail cgroup pid flag:
 
 Jail filesystem/runtime notes:
 
-- nsjail runs with `chroot: /app/nsjail/rootfs`
-- runtime paths are explicitly bind-mounted (read-only for `/usr`, `/bin`, `/lib*`)
+- runtime paths are explicitly bind-mounted (read-only for `/usr`, `/usr/local`, `/bin`, `/lib*`)
 - package install target is `/opt/snakehook/work/site/<package>-<version>`
 - host pip cache remains mounted read-only in-jail (`/var/cache/pip`)
-- uid/gid mapping maps root-in-jail to host `65534:65534` by default
+- optional chroot is available via `NSJAIL_CHROOT_PATH` when compatible with host kernel/runtime
+- `clone_newnet` is disabled by default; outbound restrictions are enforced by container nftables policy
+- jailed process defaults to uid/gid `65534` with `clone_newuser` disabled (override via envs above)
 
 ### 3. Health check
 
