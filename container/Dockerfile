@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.11-slim@sha256:6d7b4dd7d1ef8f68f2d88ca6e3e8f25f631b7d831bdb9fee9601e606b9c7c9ee
+FROM docker.io/library/python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
