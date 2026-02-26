@@ -117,7 +117,7 @@ def _summarize_install_failure(install_result: PipInstallResult) -> str:
     if _looks_like_nsjail_execve_python_error(raw):
         return (
             f"{summary} | hint: nsjail could not exec the python interpreter; "
-            "run pip as `python -m pip` inside the jail instead of an absolute interpreter path"
+            "use `/usr/bin/env python3` (or an absolute interpreter path that exists in-jail)"
         )
     return summary
 
