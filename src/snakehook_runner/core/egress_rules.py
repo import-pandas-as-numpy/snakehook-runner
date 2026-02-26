@@ -35,6 +35,7 @@ def render_nftables_rules(
     ct state established,related accept
 
     ip daddr @dns_resolvers udp dport 53 accept
+    ip daddr @dns_resolvers tcp dport 53 accept
 
     ip daddr @allowed_tls_ips tcp dport 443 accept
   }}
