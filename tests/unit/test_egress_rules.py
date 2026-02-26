@@ -20,3 +20,4 @@ def test_egress_rules_default_drop_and_allowlist() -> None:
     assert "162.159.128.233" in rules
     assert "tcp dport 443 accept" in rules
     assert "ip daddr @dns_resolvers udp dport 53 accept" in rules
+    assert "ip daddr @dns_resolvers tcp dport 53 accept" in rules

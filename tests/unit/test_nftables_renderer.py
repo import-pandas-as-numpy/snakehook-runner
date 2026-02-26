@@ -43,3 +43,33 @@ def test_write_rules_file_writes_expected_content(monkeypatch, tmp_path: Path) -
     assert "policy drop" in text
     assert "9.9.9.9" in text
     assert "3.3.3.3" in text
+
+
+def test_build_dns_resolver_allowlist_includes_system_resolvers(tmp_path: Path) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        "nameserver 10.0.0.2\n"
+        "nameserver 1.1.1.1\n"
+        "search example.internal\n",
+        encoding="utf-8",
+    )
+
+    result = nftables_renderer.build_dns_resolver_allowlist(
+        raw="1.1.1.1,8.8.8.8",
+        resolv_conf_path=str(resolv_conf),
+    )
+
+    assert result == ("1.1.1.1", "8.8.8.8", "10.0.0.2")
+
+
+def test_read_system_ipv4_resolvers_ignores_invalid_and_ipv6(tmp_path: Path) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        "# comment\n"
+        "nameserver fd00::1\n"
+        "nameserver bad-value\n"
+        "nameserver 9.9.9.9\n",
+        encoding="utf-8",
+    )
+
+    assert nftables_renderer.read_system_ipv4_resolvers(str(resolv_conf)) == ("9.9.9.9",)

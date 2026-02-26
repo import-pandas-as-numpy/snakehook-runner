@@ -5,22 +5,11 @@ set -euo pipefail
 : "${DISCORD_WEBHOOK_URL:?DISCORD_WEBHOOK_URL is required}"
 
 python - <<'PY'
-from ipaddress import ip_address
-from snakehook_runner.infra.nftables_renderer import write_rules_file
 import os
+from snakehook_runner.infra.nftables_renderer import build_dns_resolver_allowlist, write_rules_file
 
 raw = os.getenv("DNS_RESOLVERS", "1.1.1.1,8.8.8.8")
-dns_resolvers: list[str] = []
-for part in raw.split(","):
-    value = part.strip()
-    if not value:
-        continue
-    parsed = ip_address(value)
-    if parsed.version != 4:
-        raise ValueError("DNS_RESOLVERS currently supports IPv4 addresses only")
-    dns_resolvers.append(value)
-if not dns_resolvers:
-    raise ValueError("DNS_RESOLVERS must contain at least one IP")
+dns_resolvers = build_dns_resolver_allowlist(raw=raw)
 write_rules_file(os.environ["DISCORD_WEBHOOK_URL"], "/tmp/snakehook.nft", dns_resolvers)
 PY
 
