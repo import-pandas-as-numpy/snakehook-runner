@@ -117,11 +117,11 @@ async def test_orchestrator_adds_hint_for_nsjail_cgroup_namespace_failure() -> N
     assert "hint: nsjail cgroup namespace init failed" in result.message
 
 
-async def test_orchestrator_adds_hint_for_nsjail_python_execve_failure() -> None:
+async def test_orchestrator_adds_hint_for_nsjail_execve_failure() -> None:
     stderr = (
-        "[I][2026-02-26T03:58:25+0000] Executing '/usr/local/bin/python3.13'\n"
+        "[I][2026-02-26T03:58:25+0000] Executing '/usr/bin/env'\n"
         "[E][2026-02-26T03:58:25+0000][1] newProc():232 "
-        "execve('/usr/local/bin/python3.13', ...) failed\n"
+        "execve('/usr/bin/env') failed: No such file or directory\n"
         "[F][2026-02-26T03:58:25+0000][9] standaloneMode():274 "
         "Couldn't launch the child process\n"
     )
@@ -136,9 +136,9 @@ async def test_orchestrator_adds_hint_for_nsjail_python_execve_failure() -> None
 
     result = await orch.execute(RunJob(run_id="r1", package_name="x", version="1"))
 
-    assert "execve('/usr/local/bin/python3.13'" in result.message
-    assert "hint: nsjail could not exec the python interpreter" in result.message
-    assert "/usr/bin/env python3" in result.message
+    assert "execve('/usr/bin/env')" in result.message
+    assert "hint: nsjail could not exec the requested binary" in result.message
+    assert "chroot/mounts include /usr, /bin, /lib, /lib64" in result.message
 
 
 async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path) -> None:

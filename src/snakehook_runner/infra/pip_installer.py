@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from snakehook_runner.core.config import Settings
@@ -10,6 +11,7 @@ from snakehook_runner.infra.nsjail_executor import (
     minimal_process_env,
 )
 from snakehook_runner.infra.process_runner import AsyncProcessRunner
+from snakehook_runner.infra.runtime_paths import site_packages_dir
 
 
 class RealPipInstaller:
@@ -23,6 +25,10 @@ class RealPipInstaller:
 
     async def install(self, package_name: str, version: str) -> PipInstallResult:
         before_size = _dir_size(Path(self._settings.pip_cache_dir))
+        install_target = site_packages_dir(package_name, version)
+        install_target_path = Path(install_target)
+        if install_target_path.exists():
+            shutil.rmtree(install_target_path, ignore_errors=True)
         command = [
             *build_nsjail_prefix(self._settings),
             "--",
@@ -33,10 +39,18 @@ class RealPipInstaller:
             f"{package_name}=={version}",
             "--disable-pip-version-check",
             "--no-input",
+            "--upgrade",
+            "--target",
+            install_target,
             "--cache-dir",
             self._settings.pip_cache_dir,
         ]
-        env = minimal_process_env({"PIP_CACHE_DIR": self._settings.pip_cache_dir})
+        env = minimal_process_env(
+            {
+                "PIP_CACHE_DIR": self._settings.pip_cache_dir,
+                "PYTHONPATH": install_target,
+            },
+        )
         result = await self._process_runner.run(
             command=command,
             timeout_sec=self._settings.run_timeout_sec,

@@ -114,10 +114,11 @@ def _summarize_install_failure(install_result: PipInstallResult) -> str:
             f"{summary} | hint: nsjail cgroup namespace init failed; "
             "disable clone_newcgroup in nsjail config or run with cgroup namespace support"
         )
-    if _looks_like_nsjail_execve_python_error(raw):
+    if _looks_like_nsjail_execve_failure(raw):
         return (
-            f"{summary} | hint: nsjail could not exec the python interpreter; "
-            "use `/usr/bin/env python3` (or an absolute interpreter path that exists in-jail)"
+            f"{summary} | hint: nsjail could not exec the requested binary; "
+            "ensure nsjail exposes runtime filesystem paths (e.g. chroot/mounts include "
+            "/usr, /bin, /lib, /lib64) and use an absolute executable path"
         )
     return summary
 
@@ -149,10 +150,10 @@ def _looks_like_nsjail_cgroup_namespace_error(output: str) -> bool:
     )
 
 
-def _looks_like_nsjail_execve_python_error(output: str) -> bool:
+def _looks_like_nsjail_execve_failure(output: str) -> bool:
     lowered = output.lower()
     return (
         "execve(" in lowered
-        and "python" in lowered
+        and "no such file or directory" in lowered
         and "couldn't launch the child process" in lowered
     )

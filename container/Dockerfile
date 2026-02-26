@@ -53,6 +53,21 @@ COPY container/nsjail.cfg /etc/nsjail.cfg
 
 RUN pip install --no-cache-dir .
 
+# Prepare a dedicated nsjail rootfs mount target tree. The jail runs with
+# chroot=/app/nsjail/rootfs and receives only explicit bind mounts.
+RUN mkdir -p \
+    /opt/snakehook/work/site \
+    /app/nsjail/rootfs/tmp \
+    /app/nsjail/rootfs/etc/ssl/certs \
+    /app/nsjail/rootfs/etc \
+    /app/nsjail/rootfs/opt/snakehook/work \
+    /app/nsjail/rootfs/usr \
+    /app/nsjail/rootfs/bin \
+    /app/nsjail/rootfs/lib \
+    /app/nsjail/rootfs/lib64 \
+    /app/nsjail/rootfs/var/cache/pip
+RUN chown -R 65534:65534 /opt/snakehook/work
+
 VOLUME ["/var/cache/pip"]
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

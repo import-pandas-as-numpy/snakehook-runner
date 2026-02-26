@@ -29,6 +29,7 @@ Common optional limits:
 - `MAX_DOWNLOAD_BYTES` (default `300000000`)
 - `PACKAGE_DENYLIST` (default `torch,tensorflow,jaxlib`)
 - `DNS_RESOLVERS` (default `1.1.1.1,8.8.8.8`)
+- `JAIL_PYTHON_NAME` (default `python3`)
 
 ## Deployment
 
@@ -71,6 +72,14 @@ the nsjail cgroup pid flag:
 ```bash
 -e ENABLE_CGROUP_PIDS_LIMIT='0'
 ```
+
+Jail filesystem/runtime notes:
+
+- nsjail runs with `chroot: /app/nsjail/rootfs`
+- runtime paths are explicitly bind-mounted (read-only for `/usr`, `/bin`, `/lib*`)
+- package install target is `/opt/snakehook/work/site/<package>-<version>`
+- host pip cache remains mounted read-only in-jail (`/var/cache/pip`)
+- uid/gid mapping maps root-in-jail to host `65534:65534` by default
 
 ### 3. Health check
 
