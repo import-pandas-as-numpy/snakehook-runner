@@ -48,6 +48,32 @@ async def test_orchestrator_reports_pip_failure() -> None:
     assert webhook.calls[0][0] == "r1"
 
 
+async def test_orchestrator_reports_tail_of_pip_failure() -> None:
+    stderr = (
+        "[I] Mode: STANDALONE_ONCE\n"
+        "[I] Jail parameters: ...\n"
+        "[I] init clone...\n"
+        "[I] mount setup...\n"
+        "[I] seccomp setup...\n"
+        "[I] sandbox startup...\n"
+        "[E] connect() failed: Network is unreachable\n"
+        "[E] pip exited non-zero\n"
+    )
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=False, stdout="", stderr=stderr)),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(ok=True, stdout="", stderr="", timed_out=False, audit_jsonl_path=None),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(RunJob(run_id="r1", package_name="x", version="1"))
+
+    assert "[E] connect() failed: Network is unreachable" in result.message
+    assert "[I] Mode: STANDALONE_ONCE" not in result.message
+
+
 async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path) -> None:
     audit = tmp_path / "audit.jsonl"
     audit.write_text("event.one\n", encoding="utf-8")
