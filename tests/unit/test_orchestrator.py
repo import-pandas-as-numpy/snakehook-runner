@@ -95,6 +95,28 @@ async def test_orchestrator_adds_hint_for_nsjail_clone_permission_failure() -> N
     assert "hint: nsjail namespace clone blocked by container runtime" in result.message
 
 
+async def test_orchestrator_adds_hint_for_nsjail_cgroup_namespace_failure() -> None:
+    stderr = (
+        "[W][2026-02-26T03:34:50+0000][9] logParams():313 Process will be UID/EUID=0\n"
+        "[I][2026-02-26T03:34:50+0000][9] initParent():452 "
+        "Couldn't initialize cgroup user namespace for pid=10\n"
+        "[F][2026-02-26T03:34:50+0000][1] runChild():506 Launching child process failed\n"
+    )
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=False, stdout="", stderr=stderr)),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(ok=True, stdout="", stderr="", timed_out=False, audit_jsonl_path=None),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(RunJob(run_id="r1", package_name="x", version="1"))
+
+    assert "Couldn't initialize cgroup user namespace" in result.message
+    assert "hint: nsjail cgroup namespace init failed" in result.message
+
+
 async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path) -> None:
     audit = tmp_path / "audit.jsonl"
     audit.write_text("event.one\n", encoding="utf-8")
