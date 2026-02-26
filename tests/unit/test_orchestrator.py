@@ -48,6 +48,34 @@ async def test_orchestrator_reports_pip_failure() -> None:
     assert webhook.calls[0][0] == "r1"
 
 
+async def test_orchestrator_attaches_install_audit_on_pip_failure(tmp_path: Path) -> None:
+    install_audit = tmp_path / "pip-audit.jsonl"
+    install_audit.write_text("compile\n", encoding="utf-8")
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(
+            PipInstallResult(
+                ok=False,
+                stdout="",
+                stderr="boom",
+                audit_jsonl_path=str(install_audit),
+            ),
+        ),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(ok=True, stdout="", stderr="", timed_out=False, audit_jsonl_path=None),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(RunJob(run_id="r1a", package_name="x", version="1"))
+
+    assert result.ok is False
+    assert result.attachment_path is not None
+    assert result.attachment_path.endswith(".gz")
+    assert Path(result.attachment_path).exists() is False
+    assert webhook.calls[0][2] == result.attachment_path
+
+
 async def test_orchestrator_reports_tail_of_pip_failure() -> None:
     stderr = (
         "[I] Mode: STANDALONE_ONCE\n"
@@ -170,6 +198,65 @@ async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path)
     assert webhook.calls[0][2] == result.attachment_path
 
 
+async def test_orchestrator_merges_install_and_sandbox_audit(tmp_path: Path) -> None:
+    install_audit = tmp_path / "install-audit.jsonl"
+    install_audit.write_text("event.install\n", encoding="utf-8")
+    run_audit = tmp_path / "run-audit.jsonl"
+    run_audit.write_text("event.run\n", encoding="utf-8")
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(
+            PipInstallResult(ok=True, stdout="", stderr="", audit_jsonl_path=str(install_audit)),
+        ),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(
+                ok=True,
+                stdout="x",
+                stderr="",
+                timed_out=False,
+                audit_jsonl_path=str(run_audit),
+            ),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(
+        RunJob(run_id="r2m", package_name="x", version="1", mode=RunMode.EXECUTE),
+    )
+
+    assert result.ok is True
+    assert result.attachment_path is not None
+    assert Path(result.attachment_path).exists() is False
+    assert webhook.calls[0][2] == result.attachment_path
+    assert install_audit.exists() is False
+    assert run_audit.exists() is False
+
+
+async def test_orchestrator_skips_missing_audit_file() -> None:
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=True, stdout="", stderr="")),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(
+                ok=True,
+                stdout="x",
+                stderr="",
+                timed_out=False,
+                audit_jsonl_path="/tmp/missing-audit.jsonl",
+            ),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(
+        RunJob(run_id="r2b", package_name="x", version="1", mode=RunMode.EXECUTE),
+    )
+
+    assert result.ok is True
+    assert result.attachment_path is None
+    assert webhook.calls[0] == ("r2b", "run ok; stdout=1B stderr=0B", None)
+
+
 async def test_worker_handler_logs_exceptions(caplog) -> None:
     class BoomOrchestrator:
         async def execute(self, job: RunJob):
@@ -199,5 +286,6 @@ async def test_orchestrator_install_mode_skips_sandbox_execution() -> None:
     result = await orch.execute(RunJob(run_id="r4", package_name="x", version="1"))
 
     assert result.ok is True
-    assert result.message == "install ok"
-    assert webhook.calls[0] == ("r4", "install ok", None)
+    expected_message = "install ok"
+    assert result.message == expected_message
+    assert webhook.calls[0] == ("r4", expected_message, None)
