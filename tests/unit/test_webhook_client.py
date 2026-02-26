@@ -36,7 +36,10 @@ async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> N
     assert len(created) == 1
     url, data, files = created[0].posts[0]
     assert url == "https://discord.example/webhook"
-    assert "run_id=r1 done" in data["content"]
+    assert "**Snakehook Triage Result**" in data["content"]
+    assert "Status: `OK`" in data["content"]
+    assert "Run ID: `r1`" in data["content"]
+    assert "```text\ndone\n```" in data["content"]
     assert files is None
 
 
@@ -59,6 +62,7 @@ async def test_webhook_client_posts_with_attachment_and_closes_file(
     client = DiscordWebhookClient("https://discord.example/webhook")
     await client.send_summary("r2", "done", str(attachment))
 
-    _, _, files = created[0].posts[0]
+    _, data, files = created[0].posts[0]
+    assert "Attachment: `audit.jsonl.gz`" in data["content"]
     handle = files["file"][1]
     assert handle.closed is True

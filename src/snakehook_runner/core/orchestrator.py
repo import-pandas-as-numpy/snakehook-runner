@@ -109,6 +109,11 @@ def _summarize_install_failure(install_result: PipInstallResult) -> str:
             f"{summary} | hint: nsjail namespace clone blocked by container runtime; "
             "allow nsjail-required isolation capabilities and seccomp profile"
         )
+    if _looks_like_nsjail_cgroup_namespace_error(raw):
+        return (
+            f"{summary} | hint: nsjail cgroup namespace init failed; "
+            "disable clone_newcgroup in nsjail config or run with cgroup namespace support"
+        )
     return summary
 
 
@@ -128,4 +133,12 @@ def _looks_like_nsjail_clone_permission_error(output: str) -> bool:
         "clone(" in output
         and "operation not permitted" in lowered
         and "couldn't launch the child process" in lowered
+    )
+
+
+def _looks_like_nsjail_cgroup_namespace_error(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        "couldn't initialize cgroup user namespace" in lowered
+        and "launching child process failed" in lowered
     )
