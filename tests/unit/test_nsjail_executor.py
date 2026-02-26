@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+import snakehook_runner.infra.nsjail_executor as nsjail_executor
 from snakehook_runner.core.config import Settings
 from snakehook_runner.core.interfaces import RunJob, RunMode
 from snakehook_runner.infra.nsjail_executor import NsJailSandboxExecutor
@@ -10,6 +13,7 @@ class FakeRunner:
     def __init__(self) -> None:
         self.command: list[str] | None = None
         self.timeout_sec: int | None = None
+        self.env: dict[str, str] | None = None
 
     async def run(
         self,
@@ -19,6 +23,7 @@ class FakeRunner:
     ) -> ProcessResult:
         self.command = command
         self.timeout_sec = timeout_sec
+        self.env = env
         return ProcessResult(returncode=124, stdout="", stderr="", timed_out=True)
 
 
@@ -43,7 +48,16 @@ def _settings() -> Settings:
     )
 
 
-async def test_nsjail_command_contains_limits_and_readonly_cache_mount() -> None:
+async def test_nsjail_command_contains_limits_and_readonly_cache_mount(monkeypatch) -> None:
+    original_exists = os.path.exists
+
+    def fake_exists(path: str) -> bool:
+        if path == "/opt/snakehook/work":
+            return True
+        return original_exists(path)
+
+    monkeypatch.setattr(nsjail_executor.os.path, "exists", fake_exists)
+
     runner = FakeRunner()
     executor = NsJailSandboxExecutor(process_runner=runner, settings=_settings())
 
@@ -57,8 +71,15 @@ async def test_nsjail_command_contains_limits_and_readonly_cache_mount() -> None
     assert "--rlimit_as 1024" in command_text
     assert "--cgroup_pids_max 128" in command_text
     assert "--rlimit_nofile 1024" in command_text
+    assert "--bindmount_ro /usr:/usr" in command_text
+    assert "--bindmount_ro /bin:/bin" in command_text
+    assert "--bindmount_ro /lib:/lib" in command_text
+    assert "--bindmount /opt/snakehook/work:/opt/snakehook/work" in command_text
+    assert "--bindmount /tmp:/tmp" in command_text
     assert "--bindmount_ro /var/cache/pip:/var/cache/pip" in command_text
     assert "/usr/bin/env python3 -c" in command_text
+    assert runner.env is not None
+    assert runner.env["PYTHONPATH"] == "/opt/snakehook/work/site/sample-1.0"
 
 
 async def test_execute_mode_embeds_entrypoint_and_file_path() -> None:

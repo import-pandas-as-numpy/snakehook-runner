@@ -6,11 +6,25 @@ from pathlib import Path
 from snakehook_runner.core.config import Settings
 from snakehook_runner.core.interfaces import RunJob, SandboxResult
 from snakehook_runner.infra.process_runner import AsyncProcessRunner
+from snakehook_runner.infra.runtime_paths import JAIL_WORK_DIR, site_packages_dir
 
 NSJAIL_CONFIG_PATH_DEFAULT = "/etc/nsjail.cfg"
 MAX_AUDIT_BYTES = 5_000_000
 PYTHON_ENV_BIN = "/usr/bin/env"
 PYTHON_NAME_DEFAULT = "python3"
+RUNTIME_BINDMOUNTS_RO: tuple[tuple[str, str], ...] = (
+    ("/usr", "/usr"),
+    ("/bin", "/bin"),
+    ("/lib", "/lib"),
+    ("/lib64", "/lib64"),
+    ("/etc/ssl/certs", "/etc/ssl/certs"),
+    ("/etc/resolv.conf", "/etc/resolv.conf"),
+    ("/etc/hosts", "/etc/hosts"),
+)
+RUNTIME_BINDMOUNTS_RW: tuple[tuple[str, str], ...] = (
+    ("/tmp", "/tmp"),
+    (JAIL_WORK_DIR, JAIL_WORK_DIR),
+)
 
 
 class NsJailSandboxExecutor:
@@ -31,7 +45,11 @@ class NsJailSandboxExecutor:
         result = await self._runner.run(
             command=command,
             timeout_sec=self._settings.run_timeout_sec,
-            env=minimal_process_env(),
+            env=minimal_process_env(
+                {
+                    "PYTHONPATH": site_packages_dir(job.package_name, job.version),
+                },
+            ),
         )
         return SandboxResult(
             ok=(not result.timed_out and result.returncode == 0),
@@ -56,12 +74,19 @@ def build_nsjail_prefix(settings: Settings) -> list[str]:
         str(settings.rlimit_as_mb),
         "--rlimit_nofile",
         str(settings.rlimit_nofile),
-        "--bindmount_ro",
-        f"{settings.pip_cache_dir}:{settings.pip_cache_dir}",
     ]
+    for source, target in _existing_bindmounts(RUNTIME_BINDMOUNTS_RO):
+        command.extend(["--bindmount_ro", f"{source}:{target}"])
+    for source, target in _existing_bindmounts(RUNTIME_BINDMOUNTS_RW):
+        command.extend(["--bindmount", f"{source}:{target}"])
+    command.extend(["--bindmount_ro", f"{settings.pip_cache_dir}:{settings.pip_cache_dir}"])
     if settings.enable_cgroup_pids_limit:
         command.extend(["--cgroup_pids_max", str(settings.cgroup_pids_max)])
     return command
+
+
+def _existing_bindmounts(entries: tuple[tuple[str, str], ...]) -> list[tuple[str, str]]:
+    return [(source, target) for source, target in entries if os.path.exists(source)]
 
 
 def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
