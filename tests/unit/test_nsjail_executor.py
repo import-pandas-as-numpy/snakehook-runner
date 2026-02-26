@@ -67,17 +67,21 @@ async def test_nsjail_command_contains_limits_and_readonly_cache_mount(monkeypat
     assert runner.command is not None
     command_text = " ".join(runner.command)
     assert "--time_limit 45" in command_text
+    assert "--user 65534" in command_text
+    assert "--group 65534" in command_text
+    assert "--disable_clone_newuser" in command_text
     assert "--rlimit_cpu 30" in command_text
     assert "--rlimit_as 1024" in command_text
     assert "--cgroup_pids_max 128" in command_text
     assert "--rlimit_nofile 1024" in command_text
     assert "--bindmount_ro /usr:/usr" in command_text
+    assert "--bindmount_ro /usr/local:/usr/local" in command_text
     assert "--bindmount_ro /bin:/bin" in command_text
     assert "--bindmount_ro /lib:/lib" in command_text
     assert "--bindmount /opt/snakehook/work:/opt/snakehook/work" in command_text
     assert "--bindmount /tmp:/tmp" in command_text
     assert "--bindmount_ro /var/cache/pip:/var/cache/pip" in command_text
-    assert "/usr/bin/env python3 -c" in command_text
+    assert "/usr/local/bin/python3 -c" in command_text
     assert runner.env is not None
     assert runner.env["PYTHONPATH"] == "/opt/snakehook/work/site/sample-1.0"
 

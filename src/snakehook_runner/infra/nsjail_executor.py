@@ -11,9 +11,13 @@ from snakehook_runner.infra.runtime_paths import JAIL_WORK_DIR, site_packages_di
 NSJAIL_CONFIG_PATH_DEFAULT = "/etc/nsjail.cfg"
 MAX_AUDIT_BYTES = 5_000_000
 PYTHON_ENV_BIN = "/usr/bin/env"
-PYTHON_NAME_DEFAULT = "python3"
+PYTHON_NAME_DEFAULT = "/usr/local/bin/python3"
+NSJAIL_USER_DEFAULT = "65534"
+NSJAIL_GROUP_DEFAULT = "65534"
+NSJAIL_DISABLE_CLONE_NEWUSER_DEFAULT = "1"
 RUNTIME_BINDMOUNTS_RO: tuple[tuple[str, str], ...] = (
     ("/usr", "/usr"),
+    ("/usr/local", "/usr/local"),
     ("/bin", "/bin"),
     ("/lib", "/lib"),
     ("/lib64", "/lib64"),
@@ -62,10 +66,20 @@ class NsJailSandboxExecutor:
 
 def build_nsjail_prefix(settings: Settings) -> list[str]:
     config_path = os.getenv("NSJAIL_CONFIG_PATH", NSJAIL_CONFIG_PATH_DEFAULT)
+    chroot_path = os.getenv("NSJAIL_CHROOT_PATH", "").strip()
+    jail_user = os.getenv("NSJAIL_USER", NSJAIL_USER_DEFAULT).strip() or NSJAIL_USER_DEFAULT
+    jail_group = os.getenv("NSJAIL_GROUP", NSJAIL_GROUP_DEFAULT).strip() or NSJAIL_GROUP_DEFAULT
+    disable_clone_newuser = _bool_env(
+        os.getenv("NSJAIL_DISABLE_CLONE_NEWUSER", NSJAIL_DISABLE_CLONE_NEWUSER_DEFAULT),
+    )
     command = [
         "nsjail",
         "--config",
         config_path,
+        "--user",
+        jail_user,
+        "--group",
+        jail_group,
         "--time_limit",
         str(settings.run_timeout_sec),
         "--rlimit_cpu",
@@ -82,6 +96,10 @@ def build_nsjail_prefix(settings: Settings) -> list[str]:
     command.extend(["--bindmount_ro", f"{settings.pip_cache_dir}:{settings.pip_cache_dir}"])
     if settings.enable_cgroup_pids_limit:
         command.extend(["--cgroup_pids_max", str(settings.cgroup_pids_max)])
+    if disable_clone_newuser:
+        command.append("--disable_clone_newuser")
+    if chroot_path:
+        command.extend(["--chroot", chroot_path])
     return command
 
 
@@ -89,9 +107,17 @@ def _existing_bindmounts(entries: tuple[tuple[str, str], ...]) -> list[tuple[str
     return [(source, target) for source, target in entries if os.path.exists(source)]
 
 
+def _bool_env(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {
         "PATH": os.getenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+        "LD_LIBRARY_PATH": os.getenv(
+            "LD_LIBRARY_PATH",
+            "/usr/local/lib:/usr/local/lib64:/usr/lib:/lib",
+        ),
         "HOME": "/tmp",
         "TMPDIR": "/tmp",
     }
@@ -102,6 +128,8 @@ def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def jailed_python_command() -> list[str]:
     python_name = os.getenv("JAIL_PYTHON_NAME", PYTHON_NAME_DEFAULT).strip() or PYTHON_NAME_DEFAULT
+    if "/" in python_name:
+        return [python_name]
     return [PYTHON_ENV_BIN, python_name]
 
 
