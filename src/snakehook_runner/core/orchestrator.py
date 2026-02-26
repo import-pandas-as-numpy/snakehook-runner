@@ -103,6 +103,29 @@ def _summarize_install_failure(install_result: PipInstallResult) -> str:
     if not lines:
         return "no process output captured"
     snippet = " | ".join(lines[-INSTALL_ERROR_MAX_LINES:])
-    if len(snippet) <= INSTALL_ERROR_MAX_CHARS:
-        return snippet
-    return f"...{snippet[-(INSTALL_ERROR_MAX_CHARS - 3):]}"
+    summary = _truncate_middle(snippet, INSTALL_ERROR_MAX_CHARS)
+    if _looks_like_nsjail_clone_permission_error(raw):
+        return (
+            f"{summary} | hint: nsjail namespace clone blocked by container runtime; "
+            "allow nsjail-required isolation capabilities and seccomp profile"
+        )
+    return summary
+
+
+def _truncate_middle(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 5:
+        return text[:max_chars]
+    head = (max_chars - 5) // 2
+    tail = max_chars - 5 - head
+    return f"{text[:head]} ... {text[-tail:]}"
+
+
+def _looks_like_nsjail_clone_permission_error(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        "clone(" in output
+        and "operation not permitted" in lowered
+        and "couldn't launch the child process" in lowered
+    )
