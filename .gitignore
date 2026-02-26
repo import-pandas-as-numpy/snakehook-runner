@@ -1,0 +1,32 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environment and secret files
+.env
+.env.*
+*.env
+*.local
+*.secret
+*.secrets
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Local config overrides
+config.local.*
+settings.local.*
+local.settings.json
+
+# AI Slop
+AGENTS.md
+FRAMING.md
