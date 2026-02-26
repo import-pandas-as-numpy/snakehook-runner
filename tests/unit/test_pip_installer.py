@@ -34,6 +34,7 @@ def _settings(cache_dir: str, cap: int) -> Settings:
         rlimit_cpu_sec=30,
         rlimit_as_mb=1024,
         cgroup_pids_max=128,
+        enable_cgroup_pids_limit=True,
         rlimit_nofile=1024,
         pip_cache_dir=cache_dir,
         max_download_bytes=cap,

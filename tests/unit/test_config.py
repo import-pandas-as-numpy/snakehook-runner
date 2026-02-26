@@ -15,6 +15,7 @@ def test_settings_from_env_defaults(monkeypatch) -> None:
     assert cfg.api_token == "token"
     assert cfg.discord_webhook_url == "https://discord.example/webhook"
     assert cfg.max_concurrency >= 1
+    assert cfg.enable_cgroup_pids_limit is True
     assert cfg.dns_resolvers == ("1.1.1.1", "8.8.8.8")
 
 
@@ -50,4 +51,23 @@ def test_settings_rejects_empty_dns_list(monkeypatch) -> None:
     monkeypatch.setenv("DNS_RESOLVERS", "   ,   ")
 
     with pytest.raises(ValueError, match="at least one"):
+        Settings.from_env()
+
+
+def test_settings_can_disable_cgroup_pids_limit(monkeypatch) -> None:
+    monkeypatch.setenv("API_TOKEN", "token")
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+    monkeypatch.setenv("ENABLE_CGROUP_PIDS_LIMIT", "0")
+
+    cfg = Settings.from_env()
+
+    assert cfg.enable_cgroup_pids_limit is False
+
+
+def test_settings_rejects_invalid_bool_env(monkeypatch) -> None:
+    monkeypatch.setenv("API_TOKEN", "token")
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+    monkeypatch.setenv("ENABLE_CGROUP_PIDS_LIMIT", "maybe")
+
+    with pytest.raises(ValueError, match="ENABLE_CGROUP_PIDS_LIMIT"):
         Settings.from_env()

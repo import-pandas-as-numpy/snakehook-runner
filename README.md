@@ -24,6 +24,8 @@ Common optional limits:
 - `PER_IP_RATE_LIMIT` (default `30`)
 - `PER_IP_RATE_WINDOW_SEC` (default `60`)
 - `RUN_TIMEOUT_SEC` (default `45`)
+- `CGROUP_PIDS_MAX` (default `128`)
+- `ENABLE_CGROUP_PIDS_LIMIT` (default `true`)
 - `MAX_DOWNLOAD_BYTES` (default `300000000`)
 - `PACKAGE_DENYLIST` (default `torch,tensorflow,jaxlib`)
 - `DNS_RESOLVERS` (default `1.1.1.1,8.8.8.8`)
@@ -60,6 +62,14 @@ the runtime is still blocking namespace clone. On AppArmor-enabled hosts, also a
 
 ```bash
 --security-opt apparmor=unconfined
+```
+
+If nsjail fails with `Couldn't initialize cgroup user namespace` or
+`Launching child process failed`, keep the container unprivileged and disable
+the nsjail cgroup pid flag:
+
+```bash
+-e ENABLE_CGROUP_PIDS_LIMIT='0'
 ```
 
 ### 3. Health check

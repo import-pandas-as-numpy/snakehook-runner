@@ -42,7 +42,7 @@ class NsJailSandboxExecutor:
 
 def build_nsjail_prefix(settings: Settings) -> list[str]:
     config_path = os.getenv("NSJAIL_CONFIG_PATH", NSJAIL_CONFIG_PATH_DEFAULT)
-    return [
+    command = [
         "nsjail",
         "--config",
         config_path,
@@ -52,13 +52,14 @@ def build_nsjail_prefix(settings: Settings) -> list[str]:
         str(settings.rlimit_cpu_sec),
         "--rlimit_as",
         str(settings.rlimit_as_mb),
-        "--cgroup_pids_max",
-        str(settings.cgroup_pids_max),
         "--rlimit_nofile",
         str(settings.rlimit_nofile),
         "--bindmount_ro",
         f"{settings.pip_cache_dir}:{settings.pip_cache_dir}",
     ]
+    if settings.enable_cgroup_pids_limit:
+        command.extend(["--cgroup_pids_max", str(settings.cgroup_pids_max)])
+    return command
 
 
 def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
