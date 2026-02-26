@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from snakehook_runner.core.config import Settings
@@ -22,6 +23,8 @@ class RealPipInstaller:
         command = [
             *build_nsjail_prefix(self._settings),
             "--",
+            sys.executable,
+            "-m",
             "pip",
             "install",
             f"{package_name}=={version}",
