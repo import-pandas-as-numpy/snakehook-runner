@@ -9,6 +9,8 @@ from snakehook_runner.infra.process_runner import AsyncProcessRunner
 
 NSJAIL_CONFIG_PATH_DEFAULT = "/etc/nsjail.cfg"
 MAX_AUDIT_BYTES = 5_000_000
+PYTHON_ENV_BIN = "/usr/bin/env"
+PYTHON_NAME_DEFAULT = "python3"
 
 
 class NsJailSandboxExecutor:
@@ -22,7 +24,7 @@ class NsJailSandboxExecutor:
         command = [
             *build_nsjail_prefix(self._settings),
             "--",
-            "python",
+            *jailed_python_command(),
             "-c",
             audit_code,
         ]
@@ -71,6 +73,11 @@ def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     if extra:
         env.update(extra)
     return env
+
+
+def jailed_python_command() -> list[str]:
+    python_name = os.getenv("JAIL_PYTHON_NAME", PYTHON_NAME_DEFAULT).strip() or PYTHON_NAME_DEFAULT
+    return [PYTHON_ENV_BIN, python_name]
 
 
 def _build_audit_code(job: RunJob, audit_path: str) -> str:

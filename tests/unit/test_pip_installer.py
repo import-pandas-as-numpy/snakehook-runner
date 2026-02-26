@@ -58,7 +58,7 @@ async def test_pip_installer_uses_nsjail_with_readonly_cache_mount(tmp_path: Pat
     command_text = " ".join(runner.command or [])
     assert "nsjail" in command_text
     assert f"--bindmount_ro {cache_dir}:{cache_dir}" in command_text
-    assert "python -m pip install requests==2.32.0" in command_text
+    assert "/usr/bin/env python3 -m pip install requests==2.32.0" in command_text
 
 
 async def test_pip_installer_rejects_when_download_cap_exceeded(tmp_path: Path) -> None:

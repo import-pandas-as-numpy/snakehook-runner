@@ -138,6 +138,7 @@ async def test_orchestrator_adds_hint_for_nsjail_python_execve_failure() -> None
 
     assert "execve('/usr/local/bin/python3.13'" in result.message
     assert "hint: nsjail could not exec the python interpreter" in result.message
+    assert "/usr/bin/env python3" in result.message
 
 
 async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path) -> None:

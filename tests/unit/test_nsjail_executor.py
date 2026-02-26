@@ -58,6 +58,7 @@ async def test_nsjail_command_contains_limits_and_readonly_cache_mount() -> None
     assert "--cgroup_pids_max 128" in command_text
     assert "--rlimit_nofile 1024" in command_text
     assert "--bindmount_ro /var/cache/pip:/var/cache/pip" in command_text
+    assert "/usr/bin/env python3 -c" in command_text
 
 
 async def test_execute_mode_embeds_entrypoint_and_file_path() -> None:
