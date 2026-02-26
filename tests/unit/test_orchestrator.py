@@ -117,6 +117,29 @@ async def test_orchestrator_adds_hint_for_nsjail_cgroup_namespace_failure() -> N
     assert "hint: nsjail cgroup namespace init failed" in result.message
 
 
+async def test_orchestrator_adds_hint_for_nsjail_python_execve_failure() -> None:
+    stderr = (
+        "[I][2026-02-26T03:58:25+0000] Executing '/usr/local/bin/python3.13'\n"
+        "[E][2026-02-26T03:58:25+0000][1] newProc():232 "
+        "execve('/usr/local/bin/python3.13', ...) failed\n"
+        "[F][2026-02-26T03:58:25+0000][9] standaloneMode():274 "
+        "Couldn't launch the child process\n"
+    )
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=False, stdout="", stderr=stderr)),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(ok=True, stdout="", stderr="", timed_out=False, audit_jsonl_path=None),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(RunJob(run_id="r1", package_name="x", version="1"))
+
+    assert "execve('/usr/local/bin/python3.13'" in result.message
+    assert "hint: nsjail could not exec the python interpreter" in result.message
+
+
 async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path) -> None:
     audit = tmp_path / "audit.jsonl"
     audit.write_text("event.one\n", encoding="utf-8")

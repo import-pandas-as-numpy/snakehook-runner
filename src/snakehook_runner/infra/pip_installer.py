@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from snakehook_runner.core.config import Settings
 from snakehook_runner.core.interfaces import PipInstallResult
 from snakehook_runner.infra.nsjail_executor import build_nsjail_prefix, minimal_process_env
 from snakehook_runner.infra.process_runner import AsyncProcessRunner
+
+PYTHON_BIN = "python"
 
 
 class RealPipInstaller:
@@ -23,7 +24,7 @@ class RealPipInstaller:
         command = [
             *build_nsjail_prefix(self._settings),
             "--",
-            sys.executable,
+            PYTHON_BIN,
             "-m",
             "pip",
             "install",
