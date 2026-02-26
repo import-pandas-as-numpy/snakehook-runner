@@ -114,6 +114,11 @@ def _summarize_install_failure(install_result: PipInstallResult) -> str:
             f"{summary} | hint: nsjail cgroup namespace init failed; "
             "disable clone_newcgroup in nsjail config or run with cgroup namespace support"
         )
+    if _looks_like_nsjail_execve_python_error(raw):
+        return (
+            f"{summary} | hint: nsjail could not exec the python interpreter; "
+            "run pip as `python -m pip` inside the jail instead of an absolute interpreter path"
+        )
     return summary
 
 
@@ -141,4 +146,13 @@ def _looks_like_nsjail_cgroup_namespace_error(output: str) -> bool:
     return (
         "couldn't initialize cgroup user namespace" in lowered
         and "launching child process failed" in lowered
+    )
+
+
+def _looks_like_nsjail_execve_python_error(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        "execve(" in lowered
+        and "python" in lowered
+        and "couldn't launch the child process" in lowered
     )
