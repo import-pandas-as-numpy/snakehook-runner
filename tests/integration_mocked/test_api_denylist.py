@@ -19,6 +19,7 @@ def _settings() -> Settings:
         rlimit_cpu_sec=20,
         rlimit_as_mb=512,
         cgroup_pids_max=64,
+        enable_cgroup_pids_limit=True,
         rlimit_nofile=512,
         pip_cache_dir="/var/cache/pip",
         max_download_bytes=200_000_000,

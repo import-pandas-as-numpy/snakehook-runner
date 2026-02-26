@@ -17,6 +17,7 @@ class Settings:
     rlimit_cpu_sec: int
     rlimit_as_mb: int
     cgroup_pids_max: int
+    enable_cgroup_pids_limit: bool
     rlimit_nofile: int
     pip_cache_dir: str
     max_download_bytes: int
@@ -44,6 +45,7 @@ class Settings:
             rlimit_cpu_sec=_int_env("RLIMIT_CPU_SEC", 30, minimum=1),
             rlimit_as_mb=_int_env("RLIMIT_AS_MB", 1024, minimum=128),
             cgroup_pids_max=_int_env("CGROUP_PIDS_MAX", 128, minimum=8),
+            enable_cgroup_pids_limit=_bool_env("ENABLE_CGROUP_PIDS_LIMIT", True),
             rlimit_nofile=_int_env("RLIMIT_NOFILE", 1024, minimum=64),
             pip_cache_dir=os.getenv("PIP_CACHE_DIR", "/var/cache/pip"),
             max_download_bytes=_int_env("MAX_DOWNLOAD_BYTES", 300_000_000, minimum=1),
@@ -67,6 +69,18 @@ def _int_env(name: str, default: int, minimum: int) -> int:
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}")
     return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of: 1,0,true,false,yes,no,on,off")
 
 
 def _parse_dns_resolvers(raw: str) -> tuple[str, ...]:

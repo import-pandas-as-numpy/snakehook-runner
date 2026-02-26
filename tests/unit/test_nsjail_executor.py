@@ -34,6 +34,7 @@ def _settings() -> Settings:
         rlimit_cpu_sec=30,
         rlimit_as_mb=1024,
         cgroup_pids_max=128,
+        enable_cgroup_pids_limit=True,
         rlimit_nofile=1024,
         pip_cache_dir="/var/cache/pip",
         max_download_bytes=300_000_000,
@@ -99,3 +100,16 @@ async def test_execute_module_mode_embeds_module_name() -> None:
     command_text = " ".join(runner.command)
     assert "mode='execute_module'" in command_text
     assert "module_name='sample'" in command_text
+
+
+async def test_nsjail_command_skips_cgroup_pids_when_disabled() -> None:
+    runner = FakeRunner()
+    settings = _settings()
+    settings = Settings(**{**settings.__dict__, "enable_cgroup_pids_limit": False})
+    executor = NsJailSandboxExecutor(process_runner=runner, settings=settings)
+
+    await executor.run(RunJob(run_id="r4", package_name="sample", version="1.0"))
+
+    assert runner.command is not None
+    command_text = " ".join(runner.command)
+    assert "--cgroup_pids_max" not in command_text
