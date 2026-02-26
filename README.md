@@ -61,11 +61,31 @@ curl -sS http://127.0.0.1:8080/healthz
 
 ### 4. Submit a triage request
 
+Default mode is `install` (install package and exit):
+
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/v1/triage \
   -H 'Authorization: Bearer replace-me' \
   -H 'Content-Type: application/json' \
   -d '{"package_name":"requests","version":"2.32.3"}'
+```
+
+Install + execute (auto-discover console entrypoint unless `file_path`/`entrypoint` is provided):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/triage \
+  -H 'Authorization: Bearer replace-me' \
+  -H 'Content-Type: application/json' \
+  -d '{"package_name":"black","version":"24.10.0","mode":"execute"}'
+```
+
+Install + execute module (supports `file_path`, `entrypoint`, and `module_name` overrides):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/triage \
+  -H 'Authorization: Bearer replace-me' \
+  -H 'Content-Type: application/json' \
+  -d '{"package_name":"uvicorn","version":"0.35.0","mode":"execute_module","module_name":"uvicorn"}'
 ```
 
 ## Deploy from GHCR

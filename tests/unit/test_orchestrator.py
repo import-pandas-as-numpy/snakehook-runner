@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from snakehook_runner.core.interfaces import PipInstallResult, RunJob, SandboxResult
+from snakehook_runner.core.interfaces import PipInstallResult, RunJob, RunMode, SandboxResult
 from snakehook_runner.core.orchestrator import TriageOrchestrator, WorkerHandler
 
 
@@ -66,7 +66,9 @@ async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path)
         webhook_client=webhook,
     )
 
-    result = await orch.execute(RunJob(run_id="r2", package_name="x", version="1"))
+    result = await orch.execute(
+        RunJob(run_id="r2", package_name="x", version="1", mode=RunMode.EXECUTE),
+    )
 
     assert result.ok is True
     assert result.attachment_path is not None
@@ -86,3 +88,23 @@ async def test_worker_handler_logs_exceptions(caplog) -> None:
     await handler(RunJob(run_id="r3", package_name="x", version="1"))
 
     assert "triage run failed run_id=r3" in caplog.text
+
+
+async def test_orchestrator_install_mode_skips_sandbox_execution() -> None:
+    webhook = FakeWebhookClient()
+
+    class NeverRunSandbox:
+        async def run(self, job: RunJob) -> SandboxResult:
+            raise AssertionError("sandbox should not run in install mode")
+
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=True, stdout="", stderr="")),
+        sandbox_executor=NeverRunSandbox(),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(RunJob(run_id="r4", package_name="x", version="1"))
+
+    assert result.ok is True
+    assert result.message == "install ok"
+    assert webhook.calls[0] == ("r4", "install ok", None)

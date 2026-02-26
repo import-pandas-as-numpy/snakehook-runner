@@ -6,7 +6,7 @@ import time
 from fastapi.testclient import TestClient
 
 from snakehook_runner.core.config import Settings
-from snakehook_runner.core.interfaces import RunJob
+from snakehook_runner.core.interfaces import RunJob, RunMode
 from snakehook_runner.main import create_app
 
 
@@ -122,3 +122,51 @@ def test_queue_limit_returns_503() -> None:
     assert first.status_code == 202
     assert second.status_code == 202
     assert third.status_code == 503
+
+
+def test_mode_defaults_to_install_when_missing() -> None:
+    seen: list[RunJob] = []
+
+    async def handler(job: RunJob) -> None:
+        seen.append(job)
+
+    app = create_app(settings=_settings(), run_handler=handler)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/triage",
+            headers=_auth_headers(),
+            json={"package_name": "requests", "version": "2.0"},
+        )
+
+    assert resp.status_code == 202
+    assert seen
+    assert seen[0].mode == RunMode.INSTALL
+
+
+def test_mode_and_targets_are_passed_to_job() -> None:
+    seen: list[RunJob] = []
+
+    async def handler(job: RunJob) -> None:
+        seen.append(job)
+
+    app = create_app(settings=_settings(), run_handler=handler)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/triage",
+            headers=_auth_headers(),
+            json={
+                "package_name": "requests",
+                "version": "2.0",
+                "mode": "execute_module",
+                "file_path": "/tmp/run.py",
+                "entrypoint": "requests.__main__:main",
+                "module_name": "requests",
+            },
+        )
+
+    assert resp.status_code == 202
+    assert seen
+    assert seen[0].mode == RunMode.EXECUTE_MODULE
+    assert seen[0].file_path == "/tmp/run.py"
+    assert seen[0].entrypoint == "requests.__main__:main"
+    assert seen[0].module_name == "requests"

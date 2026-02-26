@@ -38,7 +38,15 @@ async def triage(
 
     service: SubmissionService = container.submission_service
     client_ip = request.client.host if request.client else "unknown"
-    result = service.submit(payload.package_name, payload.version, client_ip=client_ip)
+    result = service.submit(
+        payload.package_name,
+        payload.version,
+        client_ip=client_ip,
+        mode=payload.mode,
+        file_path=payload.file_path,
+        entrypoint=payload.entrypoint,
+        module_name=payload.module_name,
+    )
 
     if result.status == SubmitStatus.DENIED_PACKAGE:
         raise HTTPException(
