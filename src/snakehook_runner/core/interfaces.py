@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
+
+
+class RunMode(StrEnum):
+    INSTALL = "install"
+    EXECUTE = "execute"
+    EXECUTE_MODULE = "execute_module"
 
 
 @dataclass(frozen=True)
@@ -9,6 +16,10 @@ class RunJob:
     run_id: str
     package_name: str
     version: str
+    mode: RunMode = RunMode.INSTALL
+    file_path: str | None = None
+    entrypoint: str | None = None
+    module_name: str | None = None
 
 
 @dataclass(frozen=True)

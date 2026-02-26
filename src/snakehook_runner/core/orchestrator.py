@@ -4,7 +4,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from snakehook_runner.core.interfaces import PipInstaller, RunJob, SandboxExecutor, WebhookClient
+from snakehook_runner.core.interfaces import (
+    PipInstaller,
+    RunJob,
+    RunMode,
+    SandboxExecutor,
+    WebhookClient,
+)
 from snakehook_runner.infra.compression import gzip_file
 
 LOG = logging.getLogger(__name__)
@@ -36,6 +42,16 @@ class TriageOrchestrator:
                 run_id=job.run_id,
                 ok=False,
                 message=f"pip install failed: {install.stderr.strip()[:200]}",
+                attachment_path=None,
+            )
+            await self._webhook_client.send_summary(job.run_id, summary.message, None)
+            return summary
+
+        if job.mode == RunMode.INSTALL:
+            summary = ExecutionSummary(
+                run_id=job.run_id,
+                ok=True,
+                message="install ok",
                 attachment_path=None,
             )
             await self._webhook_client.send_summary(job.run_id, summary.message, None)
