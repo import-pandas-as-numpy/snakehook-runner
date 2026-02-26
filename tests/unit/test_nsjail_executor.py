@@ -81,6 +81,8 @@ async def test_nsjail_command_contains_limits_and_readonly_cache_mount(monkeypat
     assert "--bindmount /opt/snakehook/work:/opt/snakehook/work" in command_text
     assert "--bindmount /tmp:/tmp" in command_text
     assert "--bindmount_ro /var/cache/pip:/var/cache/pip" in command_text
+    assert "--env LD_LIBRARY_PATH=" in command_text
+    assert "--env PYTHONPATH=/opt/snakehook/work/site/sample-1.0" in command_text
     assert "/usr/local/bin/python3 -c" in command_text
     assert runner.env is not None
     assert runner.env["PYTHONPATH"] == "/opt/snakehook/work/site/sample-1.0"

@@ -29,8 +29,14 @@ class RealPipInstaller:
         install_target_path = Path(install_target)
         if install_target_path.exists():
             shutil.rmtree(install_target_path, ignore_errors=True)
+        env = minimal_process_env(
+            {
+                "PIP_CACHE_DIR": self._settings.pip_cache_dir,
+                "PYTHONPATH": install_target,
+            },
+        )
         command = [
-            *build_nsjail_prefix(self._settings),
+            *build_nsjail_prefix(self._settings, jailed_env=env),
             "--",
             *jailed_python_command(),
             "-m",
@@ -45,12 +51,6 @@ class RealPipInstaller:
             "--cache-dir",
             self._settings.pip_cache_dir,
         ]
-        env = minimal_process_env(
-            {
-                "PIP_CACHE_DIR": self._settings.pip_cache_dir,
-                "PYTHONPATH": install_target,
-            },
-        )
         result = await self._process_runner.run(
             command=command,
             timeout_sec=self._settings.run_timeout_sec,

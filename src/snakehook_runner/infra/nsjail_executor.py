@@ -39,8 +39,13 @@ class NsJailSandboxExecutor:
     async def run(self, job: RunJob) -> SandboxResult:
         audit_path = str(Path("/tmp") / f"audit-{job.run_id}.jsonl")
         audit_code = _build_audit_code(job=job, audit_path=audit_path)
+        env = minimal_process_env(
+            {
+                "PYTHONPATH": site_packages_dir(job.package_name, job.version),
+            },
+        )
         command = [
-            *build_nsjail_prefix(self._settings),
+            *build_nsjail_prefix(self._settings, jailed_env=env),
             "--",
             *jailed_python_command(),
             "-c",
@@ -49,11 +54,7 @@ class NsJailSandboxExecutor:
         result = await self._runner.run(
             command=command,
             timeout_sec=self._settings.run_timeout_sec,
-            env=minimal_process_env(
-                {
-                    "PYTHONPATH": site_packages_dir(job.package_name, job.version),
-                },
-            ),
+            env=env,
         )
         return SandboxResult(
             ok=(not result.timed_out and result.returncode == 0),
@@ -64,7 +65,10 @@ class NsJailSandboxExecutor:
         )
 
 
-def build_nsjail_prefix(settings: Settings) -> list[str]:
+def build_nsjail_prefix(
+    settings: Settings,
+    jailed_env: dict[str, str] | None = None,
+) -> list[str]:
     config_path = os.getenv("NSJAIL_CONFIG_PATH", NSJAIL_CONFIG_PATH_DEFAULT)
     chroot_path = os.getenv("NSJAIL_CHROOT_PATH", "").strip()
     jail_user = os.getenv("NSJAIL_USER", NSJAIL_USER_DEFAULT).strip() or NSJAIL_USER_DEFAULT
@@ -100,6 +104,8 @@ def build_nsjail_prefix(settings: Settings) -> list[str]:
         command.append("--disable_clone_newuser")
     if chroot_path:
         command.extend(["--chroot", chroot_path])
+    for key, value in _sorted_env(jailed_env):
+        command.extend(["--env", f"{key}={value}"])
     return command
 
 
@@ -109,6 +115,12 @@ def _existing_bindmounts(entries: tuple[tuple[str, str], ...]) -> list[tuple[str
 
 def _bool_env(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sorted_env(jailed_env: dict[str, str] | None) -> list[tuple[str, str]]:
+    if not jailed_env:
+        return []
+    return sorted(jailed_env.items())
 
 
 def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
