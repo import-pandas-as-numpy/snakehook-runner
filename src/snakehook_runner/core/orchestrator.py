@@ -6,6 +6,7 @@ from pathlib import Path
 
 from snakehook_runner.core.interfaces import (
     PipInstaller,
+    PipInstallResult,
     RunJob,
     RunMode,
     SandboxExecutor,
@@ -14,6 +15,8 @@ from snakehook_runner.core.interfaces import (
 from snakehook_runner.infra.compression import gzip_file
 
 LOG = logging.getLogger(__name__)
+INSTALL_ERROR_MAX_CHARS = 350
+INSTALL_ERROR_MAX_LINES = 6
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,7 @@ class TriageOrchestrator:
             summary = ExecutionSummary(
                 run_id=job.run_id,
                 ok=False,
-                message=f"pip install failed: {install.stderr.strip()[:200]}",
+                message=f"pip install failed: {_summarize_install_failure(install)}",
                 attachment_path=None,
             )
             await self._webhook_client.send_summary(job.run_id, summary.message, None)
@@ -90,3 +93,16 @@ class WorkerHandler:
             await self._orchestrator.execute(job)
         except Exception:
             LOG.exception("triage run failed run_id=%s", job.run_id)
+
+
+def _summarize_install_failure(install_result: PipInstallResult) -> str:
+    raw = install_result.stderr.strip() or install_result.stdout.strip()
+    if not raw:
+        return "no process output captured"
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return "no process output captured"
+    snippet = " | ".join(lines[-INSTALL_ERROR_MAX_LINES:])
+    if len(snippet) <= INSTALL_ERROR_MAX_CHARS:
+        return snippet
+    return f"...{snippet[-(INSTALL_ERROR_MAX_CHARS - 3):]}"
