@@ -38,19 +38,28 @@ docker build -f container/Dockerfile -t snakehook-runner:local .
 
 ### 2. Run container
 
-`entrypoint.sh` applies nftables rules, so the container needs network admin capability.
+`entrypoint.sh` applies nftables rules, and nsjail requires namespace/cgroup isolation privileges.
 
 ```bash
 docker volume create snakehook-pip-cache
 
 docker run --rm -p 8080:8080 \
   --cap-add=NET_ADMIN \
+  --cap-add=SYS_ADMIN \
+  --security-opt seccomp=unconfined \
   -e API_TOKEN='replace-me' \
   -e DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...' \
   -e MAX_CONCURRENCY='2' \
   -e QUEUE_LIMIT='20' \
   -v snakehook-pip-cache:/var/cache/pip \
   snakehook-runner:local
+```
+
+If nsjail fails with `clone(...CLONE_NEWUSER|...|CLONE_NEWNET) failed: Operation not permitted`,
+the runtime is still blocking namespace clone. On AppArmor-enabled hosts, also add:
+
+```bash
+--security-opt apparmor=unconfined
 ```
 
 ### 3. Health check
