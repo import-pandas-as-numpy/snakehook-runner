@@ -35,8 +35,10 @@ class RealPipInstaller:
         install_target = site_packages_dir(package_name, version)
         audit_path = str(Path("/tmp") / f"pip-audit-{uuid.uuid4().hex}.jsonl")
         audit_bootstrap_dir = Path(tempfile.mkdtemp(prefix="snakehook-pip-audit-", dir="/tmp"))
+        audit_bootstrap_dir.chmod(0o755)
         audit_sitecustomize = audit_bootstrap_dir / "sitecustomize.py"
         audit_sitecustomize.write_text(_build_pip_audit_sitecustomize(), encoding="utf-8")
+        audit_sitecustomize.chmod(0o644)
         LOG.info(
             "pip install start package=%s version=%s target=%s audit_path=%s",
             package_name,
