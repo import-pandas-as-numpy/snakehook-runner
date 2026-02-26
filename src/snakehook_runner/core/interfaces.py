@@ -27,6 +27,7 @@ class PipInstallResult:
     ok: bool
     stdout: str
     stderr: str
+    audit_jsonl_path: str | None = None
 
 
 @dataclass(frozen=True)

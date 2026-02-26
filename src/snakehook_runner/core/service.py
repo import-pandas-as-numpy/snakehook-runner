@@ -47,10 +47,19 @@ class SubmissionService:
         entrypoint: str | None = None,
         module_name: str | None = None,
     ) -> SubmitResult:
+        LOG.info(
+            "triage submit request ip=%s package=%s version=%s mode=%s",
+            client_ip,
+            package_name,
+            version,
+            mode.value,
+        )
         if is_denied_package(package_name, self._package_denylist):
+            LOG.warning("triage denied by package policy ip=%s package=%s", client_ip, package_name)
             return SubmitResult(status=SubmitStatus.DENIED_PACKAGE, run_id=None)
 
         if not self._rate_limiter.allow(client_ip):
+            LOG.warning("triage rate limited ip=%s", client_ip)
             return SubmitResult(status=SubmitStatus.RATE_LIMITED, run_id=None)
 
         run_id = str(uuid.uuid4())
@@ -68,4 +77,5 @@ class SubmissionService:
         if not decision.accepted:
             LOG.warning("queue full; rejected run from ip=%s", client_ip)
             return SubmitResult(status=SubmitStatus.OVERLOADED, run_id=None)
+        LOG.info("triage accepted run_id=%s ip=%s", run_id, client_ip)
         return SubmitResult(status=SubmitStatus.ACCEPTED, run_id=run_id)

@@ -39,31 +39,71 @@ class TriageOrchestrator:
         self._webhook_client = webhook_client
 
     async def execute(self, job: RunJob) -> ExecutionSummary:
+        LOG.info(
+            "triage start run_id=%s package=%s version=%s mode=%s",
+            job.run_id,
+            job.package_name,
+            job.version,
+            job.mode.value,
+        )
         install = await self._pip_installer.install(job.package_name, job.version)
+        install_audit_path = _existing_path(install.audit_jsonl_path)
         if not install.ok:
+            attachment_path = _compress_audit_sources(
+                run_id=job.run_id,
+                install_audit_path=install_audit_path,
+                sandbox_audit_path=None,
+            )
             summary = ExecutionSummary(
                 run_id=job.run_id,
                 ok=False,
                 message=f"pip install failed: {_summarize_install_failure(install)}",
-                attachment_path=None,
+                attachment_path=attachment_path,
             )
-            await self._webhook_client.send_summary(job.run_id, summary.message, None)
+            LOG.warning("triage install failed run_id=%s", job.run_id)
+            try:
+                await self._webhook_client.send_summary(
+                    job.run_id,
+                    summary.message,
+                    attachment_path,
+                )
+            finally:
+                _cleanup_attachment(attachment_path, job.run_id)
             return summary
 
         if job.mode == RunMode.INSTALL:
+            attachment_path = _compress_audit_sources(
+                run_id=job.run_id,
+                install_audit_path=install_audit_path,
+                sandbox_audit_path=None,
+            )
             summary = ExecutionSummary(
                 run_id=job.run_id,
                 ok=True,
                 message="install ok",
-                attachment_path=None,
+                attachment_path=attachment_path,
             )
-            await self._webhook_client.send_summary(job.run_id, summary.message, None)
+            LOG.info(
+                "triage install-only run complete run_id=%s",
+                job.run_id,
+            )
+            try:
+                await self._webhook_client.send_summary(
+                    job.run_id,
+                    summary.message,
+                    attachment_path,
+                )
+            finally:
+                _cleanup_attachment(attachment_path, job.run_id)
             return summary
 
+        LOG.info("triage sandbox execution starting run_id=%s", job.run_id)
         sandbox = await self._sandbox_executor.run(job)
-        attachment_path: str | None = None
-        if sandbox.audit_jsonl_path:
-            attachment_path = gzip_file(sandbox.audit_jsonl_path)
+        attachment_path = _compress_audit_sources(
+            run_id=job.run_id,
+            install_audit_path=install_audit_path,
+            sandbox_audit_path=_existing_path(sandbox.audit_jsonl_path),
+        )
 
         outcome = "ok" if sandbox.ok else "failed"
         timeout_note = " (timed out)" if sandbox.timed_out else ""
@@ -79,8 +119,8 @@ class TriageOrchestrator:
         try:
             await self._webhook_client.send_summary(job.run_id, summary.message, attachment_path)
         finally:
-            if attachment_path:
-                Path(attachment_path).unlink(missing_ok=True)
+            _cleanup_attachment(attachment_path, job.run_id)
+        LOG.info("triage complete run_id=%s ok=%s", job.run_id, summary.ok)
         return summary
 
 
@@ -157,3 +197,55 @@ def _looks_like_nsjail_execve_failure(output: str) -> bool:
         and "no such file or directory" in lowered
         and "couldn't launch the child process" in lowered
     )
+
+
+def _existing_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    if not Path(path).exists():
+        LOG.warning("triage audit telemetry not found path=%s", path)
+        return None
+    return path
+
+
+def _compress_audit_sources(
+    run_id: str,
+    install_audit_path: str | None,
+    sandbox_audit_path: str | None,
+) -> str | None:
+    if install_audit_path and sandbox_audit_path:
+        merged_path = str(Path("/tmp") / f"audit-{run_id}.jsonl")
+        _merge_audit_logs(
+            output_path=merged_path,
+            sources=(("install", install_audit_path), ("sandbox", sandbox_audit_path)),
+        )
+        attachment_path = gzip_file(merged_path)
+        Path(install_audit_path).unlink(missing_ok=True)
+        Path(sandbox_audit_path).unlink(missing_ok=True)
+        LOG.info("triage combined and compressed install+sandbox audit run_id=%s", run_id)
+        return attachment_path
+    if install_audit_path:
+        attachment_path = gzip_file(install_audit_path)
+        LOG.info("triage compressed install audit run_id=%s path=%s", run_id, attachment_path)
+        return attachment_path
+    if sandbox_audit_path:
+        attachment_path = gzip_file(sandbox_audit_path)
+        LOG.info("triage compressed sandbox audit run_id=%s path=%s", run_id, attachment_path)
+        return attachment_path
+    return None
+
+
+def _merge_audit_logs(output_path: str, sources: tuple[tuple[str, str], ...]) -> None:
+    output = Path(output_path)
+    with output.open("w", encoding="utf-8") as fout:
+        for stage, source_path in sources:
+            with Path(source_path).open("r", encoding="utf-8", errors="replace") as fin:
+                for line in fin:
+                    fout.write(f"{stage}:{line}")
+
+
+def _cleanup_attachment(attachment_path: str | None, run_id: str) -> None:
+    if not attachment_path:
+        return
+    Path(attachment_path).unlink(missing_ok=True)
+    LOG.info("triage removed temporary telemetry attachment run_id=%s", run_id)

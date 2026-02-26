@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -20,6 +21,8 @@ from snakehook_runner.infra.pip_installer import RealPipInstaller
 from snakehook_runner.infra.process_runner import AsyncProcessRunner
 from snakehook_runner.infra.webhook_client import DiscordWebhookClient
 
+LOG = logging.getLogger(__name__)
+
 
 @dataclass
 class AppContainer:
@@ -32,6 +35,7 @@ def create_app(
     settings: Settings | None = None,
     run_handler: Callable[[RunJob], Awaitable[None]] | None = None,
 ) -> FastAPI:
+    _configure_logging()
     cfg = settings or Settings.from_env()
 
     if os.getenv("CI_MOCK_ONLY") == "1" and run_handler is None:
@@ -86,4 +90,22 @@ def create_app(
     app = FastAPI(title="snakehook-runner", lifespan=lifespan)
     app.state.container = container
     app.include_router(router)
+    LOG.info(
+        "app initialized max_concurrency=%s queue_limit=%s timeout_sec=%s",
+        cfg.max_concurrency,
+        cfg.queue_limit,
+        cfg.run_timeout_sec,
+    )
     return app
+
+
+def _configure_logging() -> None:
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+    level_name = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )

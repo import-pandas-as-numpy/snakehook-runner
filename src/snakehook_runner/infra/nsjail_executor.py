@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -29,6 +30,7 @@ RUNTIME_BINDMOUNTS_RW: tuple[tuple[str, str], ...] = (
     ("/tmp", "/tmp"),
     (JAIL_WORK_DIR, JAIL_WORK_DIR),
 )
+LOG = logging.getLogger(__name__)
 
 
 class NsJailSandboxExecutor:
@@ -38,6 +40,14 @@ class NsJailSandboxExecutor:
 
     async def run(self, job: RunJob) -> SandboxResult:
         audit_path = str(Path("/tmp") / f"audit-{job.run_id}.jsonl")
+        LOG.info(
+            "sandbox run start run_id=%s package=%s version=%s mode=%s audit_path=%s",
+            job.run_id,
+            job.package_name,
+            job.version,
+            job.mode.value,
+            audit_path,
+        )
         audit_code = _build_audit_code(job=job, audit_path=audit_path)
         env = minimal_process_env(
             {
@@ -55,6 +65,17 @@ class NsJailSandboxExecutor:
             command=command,
             timeout_sec=self._settings.run_timeout_sec,
             env=env,
+        )
+        LOG.info(
+            (
+                "sandbox run complete run_id=%s timed_out=%s return_ok=%s "
+                "stdout_bytes=%s stderr_bytes=%s"
+            ),
+            job.run_id,
+            result.timed_out,
+            result.returncode == 0,
+            len(result.stdout),
+            len(result.stderr),
         )
         return SandboxResult(
             ok=(not result.timed_out and result.returncode == 0),

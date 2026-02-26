@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from snakehook_runner.infra.webhook_client import DiscordWebhookClient
@@ -18,6 +19,12 @@ class FakeAsyncClient:
 
     async def post(self, url: str, data: dict, files=None):
         self.posts.append((url, data, files))
+        return FakeResponse()
+
+
+class FakeResponse:
+    def raise_for_status(self) -> None:
+        return None
 
 
 async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> None:
@@ -36,10 +43,11 @@ async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> N
     assert len(created) == 1
     url, data, files = created[0].posts[0]
     assert url == "https://discord.example/webhook"
-    assert "**Snakehook Triage Result**" in data["content"]
-    assert "Status: `OK`" in data["content"]
-    assert "Run ID: `r1`" in data["content"]
-    assert "```text\ndone\n```" in data["content"]
+    payload = json.loads(data["payload_json"])
+    assert "**Snakehook Triage Result**" in payload["content"]
+    assert "Status: `OK`" in payload["content"]
+    assert "Run ID: `r1`" in payload["content"]
+    assert "```text\ndone\n```" in payload["content"]
     assert files is None
 
 
@@ -63,6 +71,7 @@ async def test_webhook_client_posts_with_attachment_and_closes_file(
     await client.send_summary("r2", "done", str(attachment))
 
     _, data, files = created[0].posts[0]
-    assert "Attachment: `audit.jsonl.gz`" in data["content"]
-    handle = files["file"][1]
+    payload = json.loads(data["payload_json"])
+    assert "Attachment: `audit.jsonl.gz`" in payload["content"]
+    handle = files["files[0]"][1]
     assert handle.closed is True

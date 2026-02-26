@@ -11,6 +11,7 @@ class FakeRunner:
     def __init__(self, result: ProcessResult) -> None:
         self._result = result
         self.command: list[str] | None = None
+        self.env: dict[str, str] | None = None
 
     async def run(
         self,
@@ -19,6 +20,9 @@ class FakeRunner:
         env: dict[str, str] | None = None,
     ) -> ProcessResult:
         self.command = command
+        self.env = env
+        if env and env.get("SNAKEHOOK_AUDIT_PATH"):
+            Path(env["SNAKEHOOK_AUDIT_PATH"]).write_text("event\n", encoding="utf-8")
         return self._result
 
 
@@ -62,6 +66,12 @@ async def test_pip_installer_uses_nsjail_with_readonly_cache_mount(tmp_path: Pat
     assert "--env PIP_CACHE_DIR=" in command_text
     assert "/usr/local/bin/python3 -m pip install requests==2.32.0" in command_text
     assert "--target /opt/snakehook/work/site/requests-2.32.0" in command_text
+    assert result.audit_jsonl_path is not None
+    assert result.audit_jsonl_path.startswith("/tmp/pip-audit-")
+    assert runner.env is not None
+    assert "SNAKEHOOK_AUDIT_PATH" in runner.env
+    assert "SNAKEHOOK_AUDIT_LIMIT" in runner.env
+    assert "site/requests-2.32.0" in runner.env["PYTHONPATH"]
 
 
 async def test_pip_installer_rejects_when_download_cap_exceeded(tmp_path: Path) -> None:
