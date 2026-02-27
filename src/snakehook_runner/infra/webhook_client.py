@@ -19,47 +19,57 @@ class DiscordWebhookClient:
         self._url = webhook_url
         self._timeout_sec = timeout_sec
 
-    async def send_summary(self, summary: WebhookSummary, attachment_path: str | None) -> None:
-        resolved_attachment_path: str | None = None
-        files = None
-        if attachment_path and Path(attachment_path).exists():
-            resolved_attachment_path = attachment_path
-            files = {
-                "files[0]": (
-                    Path(attachment_path).name,
-                    open(attachment_path, "rb"),
-                    "application/gzip",
+    async def send_summary(
+        self,
+        summary: WebhookSummary,
+        attachment_paths: tuple[str, ...] = (),
+    ) -> None:
+        resolved_attachment_paths: list[str] = []
+        files: dict[str, tuple[str, object, str]] | None = None
+        opened_handles: list[object] = []
+        for path in attachment_paths:
+            if not Path(path).exists():
+                LOG.warning(
+                    "webhook attachment missing; skipping run_id=%s path=%s",
+                    summary.run_id,
+                    path,
                 )
-            }
-        elif attachment_path:
-            LOG.warning(
-                "webhook attachment missing; sending summary without attachment run_id=%s path=%s",
-                summary.run_id,
-                attachment_path,
+                continue
+            if files is None:
+                files = {}
+            index = len(resolved_attachment_paths)
+            handle = open(path, "rb")
+            opened_handles.append(handle)
+            files[f"files[{index}]"] = (
+                Path(path).name,
+                handle,
+                _attachment_content_type(path),
             )
-        payload = _build_discord_payload(summary, resolved_attachment_path)
+            resolved_attachment_paths.append(path)
+        payload = _build_discord_payload(summary, tuple(resolved_attachment_paths))
         data: dict[str, str] = {"payload_json": json.dumps(payload)}
         LOG.info(
-            "posting discord summary run_id=%s has_attachment=%s",
+            "posting discord summary run_id=%s attachment_count=%s",
             summary.run_id,
-            resolved_attachment_path is not None,
+            len(resolved_attachment_paths),
         )
         try:
             async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
                 response = await client.post(self._url, data=data, files=files)
                 response.raise_for_status()
         finally:
-            if files:
-                files["files[0]"][1].close()
+            for handle in opened_handles:
+                handle.close()
 
 
 def _build_discord_payload(
     summary: WebhookSummary,
-    attachment_path: str | None,
+    attachment_paths: tuple[str, ...],
 ) -> dict[str, object]:
     attachment_note = ""
-    if attachment_path:
-        attachment_note = f"\nAttachment: `{Path(attachment_path).name}`"
+    if attachment_paths:
+        notes = [f"`{Path(path).name}`" for path in attachment_paths]
+        attachment_note = f"\nAttachments: {', '.join(notes)}"
     normalized = _normalize_summary(summary.summary)
     color = 0x2ECC71 if summary.ok else 0xE74C3C
     if summary.timed_out:
@@ -107,6 +117,14 @@ def _build_discord_payload(
         ],
     }
     return {"embeds": [embed]}
+
+
+def _attachment_content_type(path: str) -> str:
+    if path.endswith(".gz"):
+        return "application/gzip"
+    if path.endswith(".html"):
+        return "text/html"
+    return "application/octet-stream"
 
 
 def _normalize_summary(summary: str) -> str:

@@ -10,7 +10,7 @@ from snakehook_runner.infra.process_runner import AsyncProcessRunner
 from snakehook_runner.infra.runtime_paths import JAIL_WORK_DIR, site_packages_dir
 
 NSJAIL_CONFIG_PATH_DEFAULT = "/etc/nsjail.cfg"
-MAX_AUDIT_BYTES = 5_000_000
+MAX_AUDIT_BYTES = 50_000_000
 PYTHON_ENV_BIN = "/usr/bin/env"
 PYTHON_NAME_DEFAULT = "/usr/local/bin/python3"
 NSJAIL_USER_DEFAULT = "65534"
