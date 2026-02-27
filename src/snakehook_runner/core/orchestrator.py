@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import html
 import json
 import logging
 import os
@@ -22,6 +23,9 @@ from snakehook_runner.infra.compression import gzip_file
 LOG = logging.getLogger(__name__)
 INSTALL_ERROR_MAX_CHARS = 350
 INSTALL_ERROR_MAX_LINES = 6
+HIGHLIGHT_MAX_ITEMS = 200
+HTML_LIST_MAX_ITEMS = 400
+TOP_EVENT_LIMIT = 25
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,7 @@ class TriageOrchestrator:
         install_audit_path = _existing_path(install.audit_jsonl_path)
         install_highlights = _collect_audit_highlights(("install", install_audit_path))
         if not install.ok:
-            attachment_path = _compress_audit_sources(
+            telemetry_attachment_path = _compress_audit_sources(
                 run_id=job.run_id,
                 install_audit_path=install_audit_path,
                 sandbox_audit_path=None,
@@ -64,7 +68,17 @@ class TriageOrchestrator:
                 run_id=job.run_id,
                 ok=False,
                 message=f"pip install failed: {_summarize_install_failure(install)}",
-                attachment_path=attachment_path,
+                attachment_path=telemetry_attachment_path,
+            )
+            html_attachment_path = _write_html_report(
+                run_id=job.run_id,
+                job=job,
+                summary=summary,
+                highlights=install_highlights,
+            )
+            attachment_paths = _build_attachment_list(
+                telemetry_attachment_path=telemetry_attachment_path,
+                html_attachment_path=html_attachment_path,
             )
             LOG.warning("triage install failed run_id=%s", job.run_id)
             try:
@@ -78,14 +92,14 @@ class TriageOrchestrator:
                         stderr_bytes=len(install.stderr),
                         highlights=install_highlights,
                     ),
-                    attachment_path,
+                    attachment_paths=attachment_paths,
                 )
             finally:
-                _cleanup_attachment(attachment_path, job.run_id)
+                _cleanup_attachments(attachment_paths, job.run_id)
             return summary
 
         if job.mode == RunMode.INSTALL:
-            attachment_path = _compress_audit_sources(
+            telemetry_attachment_path = _compress_audit_sources(
                 run_id=job.run_id,
                 install_audit_path=install_audit_path,
                 sandbox_audit_path=None,
@@ -94,7 +108,17 @@ class TriageOrchestrator:
                 run_id=job.run_id,
                 ok=True,
                 message="install ok",
-                attachment_path=attachment_path,
+                attachment_path=telemetry_attachment_path,
+            )
+            html_attachment_path = _write_html_report(
+                run_id=job.run_id,
+                job=job,
+                summary=summary,
+                highlights=install_highlights,
+            )
+            attachment_paths = _build_attachment_list(
+                telemetry_attachment_path=telemetry_attachment_path,
+                html_attachment_path=html_attachment_path,
             )
             LOG.info(
                 "triage install-only run complete run_id=%s",
@@ -111,10 +135,10 @@ class TriageOrchestrator:
                         stderr_bytes=len(install.stderr),
                         highlights=install_highlights,
                     ),
-                    attachment_path,
+                    attachment_paths=attachment_paths,
                 )
             finally:
-                _cleanup_attachment(attachment_path, job.run_id)
+                _cleanup_attachments(attachment_paths, job.run_id)
             return summary
 
         LOG.info("triage sandbox execution starting run_id=%s", job.run_id)
@@ -123,7 +147,7 @@ class TriageOrchestrator:
             ("install", install_audit_path),
             ("sandbox", _existing_path(sandbox.audit_jsonl_path)),
         )
-        attachment_path = _compress_audit_sources(
+        telemetry_attachment_path = _compress_audit_sources(
             run_id=job.run_id,
             install_audit_path=install_audit_path,
             sandbox_audit_path=_existing_path(sandbox.audit_jsonl_path),
@@ -138,7 +162,17 @@ class TriageOrchestrator:
                 f"run {outcome}{timeout_note}; "
                 f"stdout={len(sandbox.stdout)}B stderr={len(sandbox.stderr)}B"
             ),
-            attachment_path=attachment_path,
+            attachment_path=telemetry_attachment_path,
+        )
+        html_attachment_path = _write_html_report(
+            run_id=job.run_id,
+            job=job,
+            summary=summary,
+            highlights=run_highlights,
+        )
+        attachment_paths = _build_attachment_list(
+            telemetry_attachment_path=telemetry_attachment_path,
+            html_attachment_path=html_attachment_path,
         )
         try:
             await self._webhook_client.send_summary(
@@ -151,10 +185,10 @@ class TriageOrchestrator:
                     stderr_bytes=len(sandbox.stderr),
                     highlights=run_highlights,
                 ),
-                attachment_path,
+                attachment_paths=attachment_paths,
             )
         finally:
-            _cleanup_attachment(attachment_path, job.run_id)
+            _cleanup_attachments(attachment_paths, job.run_id)
         LOG.info("triage complete run_id=%s ok=%s", job.run_id, summary.ok)
         return summary
 
@@ -279,17 +313,36 @@ def _merge_audit_logs(output_path: str, sources: tuple[tuple[str, str], ...]) ->
                     fout.write(f"{stage}:{line}")
 
 
-def _cleanup_attachment(attachment_path: str | None, run_id: str) -> None:
-    if not attachment_path:
-        return
-    Path(attachment_path).unlink(missing_ok=True)
-    LOG.info("triage removed temporary telemetry attachment run_id=%s", run_id)
+def _build_attachment_list(
+    telemetry_attachment_path: str | None,
+    html_attachment_path: str | None,
+) -> tuple[str, ...]:
+    paths: list[str] = []
+    if telemetry_attachment_path:
+        paths.append(telemetry_attachment_path)
+    if html_attachment_path:
+        paths.append(html_attachment_path)
+    return tuple(paths)
+
+
+def _cleanup_attachments(attachment_paths: tuple[str, ...], run_id: str) -> None:
+    for path in attachment_paths:
+        Path(path).unlink(missing_ok=True)
+    if attachment_paths:
+        LOG.info(
+            "triage removed temporary telemetry attachments run_id=%s count=%s",
+            run_id,
+            len(attachment_paths),
+        )
 
 
 @dataclass(frozen=True)
 class AuditHighlights:
     files_written: tuple[str, ...]
+    files_read: tuple[str, ...]
     network_connections: tuple[str, ...]
+    subprocesses: tuple[str, ...]
+    top_events: tuple[str, ...]
 
 
 def _build_webhook_summary(
@@ -321,7 +374,10 @@ def _build_webhook_summary(
 
 def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHighlights:
     files_written: dict[str, None] = {}
+    files_read: dict[str, None] = {}
     network_connections: dict[str, None] = {}
+    subprocesses: dict[str, None] = {}
+    event_counts: dict[str, int] = {}
     for stage, path in stage_paths:
         if not path:
             continue
@@ -332,15 +388,41 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
                     continue
                 event = str(record.get("event") or "")
                 args_text = str(record.get("args") or "")
+                if event:
+                    event_counts[event] = event_counts.get(event, 0) + 1
                 write_path = _extract_written_file(event, args_text)
                 if write_path:
                     files_written[f"{stage}: {write_path}"] = None
+                    if len(files_written) > HIGHLIGHT_MAX_ITEMS:
+                        files_written.pop(next(iter(files_written)))
+                read_path = _extract_read_file(event, args_text)
+                if read_path:
+                    files_read[f"{stage}: {read_path}"] = None
+                    if len(files_read) > HIGHLIGHT_MAX_ITEMS:
+                        files_read.pop(next(iter(files_read)))
                 connection = _extract_network_connection(event, args_text)
                 if connection:
                     network_connections[f"{stage}: {connection}"] = None
+                    if len(network_connections) > HIGHLIGHT_MAX_ITEMS:
+                        network_connections.pop(next(iter(network_connections)))
+                subprocess = _extract_subprocess(event, args_text)
+                if subprocess:
+                    subprocesses[f"{stage}: {subprocess}"] = None
+                    if len(subprocesses) > HIGHLIGHT_MAX_ITEMS:
+                        subprocesses.pop(next(iter(subprocesses)))
+    top_events = tuple(
+        f"{event}: {count}"
+        for event, count in sorted(
+            event_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:TOP_EVENT_LIMIT]
+    )
     return AuditHighlights(
         files_written=tuple(files_written.keys()),
+        files_read=tuple(files_read.keys()),
         network_connections=tuple(network_connections.keys()),
+        subprocesses=tuple(subprocesses.keys()),
+        top_events=top_events,
     )
 
 
@@ -386,6 +468,33 @@ def _extract_written_file(event: str, args_text: str) -> str | None:
     return None
 
 
+def _extract_read_file(event: str, args_text: str) -> str | None:
+    parsed = _parse_literal_args(args_text)
+    if event == "open" and isinstance(parsed, tuple) and parsed:
+        target = parsed[0] if len(parsed) > 0 else None
+        mode = parsed[1] if len(parsed) > 1 else "r"
+        if isinstance(target, (str, os.PathLike)) and not _is_write_mode(str(mode)):
+            return os.fspath(target)
+        return None
+    if event == "os.open" and isinstance(parsed, tuple) and len(parsed) >= 2:
+        target, flags = parsed[0], parsed[1]
+        if not isinstance(target, (str, os.PathLike)) or not isinstance(flags, int):
+            return None
+        has_write_flag = bool(
+            flags
+            & (
+                os.O_WRONLY
+                | os.O_RDWR
+                | os.O_APPEND
+                | os.O_CREAT
+                | os.O_TRUNC
+            ),
+        )
+        if not has_write_flag:
+            return os.fspath(target)
+    return None
+
+
 def _extract_network_connection(event: str, args_text: str) -> str | None:
     if event != "socket.connect":
         return None
@@ -400,6 +509,28 @@ def _extract_network_connection(event: str, args_text: str) -> str | None:
     return f"{host}:{port}"
 
 
+def _extract_subprocess(event: str, args_text: str) -> str | None:
+    parsed = _parse_literal_args(args_text)
+    if event in {"subprocess.Popen", "subprocess.run", "os.system"}:
+        if isinstance(parsed, tuple) and parsed:
+            return _normalize_command(parsed[0])
+        if event == "os.system":
+            return _truncate_middle(args_text, 120)
+    if event in {"os.exec", "os.execve", "os.posix_spawn", "os.spawn"}:
+        if isinstance(parsed, tuple) and parsed:
+            return _normalize_command(parsed[0])
+    return None
+
+
+def _normalize_command(value: object) -> str:
+    if isinstance(value, (str, os.PathLike)):
+        return _truncate_middle(os.fspath(value), 120)
+    if isinstance(value, (list, tuple)):
+        rendered = " ".join(_normalize_command(part) for part in value[:8])
+        return _truncate_middle(rendered, 120)
+    return _truncate_middle(repr(value), 120)
+
+
 def _parse_literal_args(args_text: str) -> object | None:
     try:
         return ast.literal_eval(args_text)
@@ -409,3 +540,121 @@ def _parse_literal_args(args_text: str) -> object | None:
 
 def _is_write_mode(mode: str) -> bool:
     return any(flag in mode for flag in ("w", "a", "x", "+"))
+
+
+def _write_html_report(
+    run_id: str,
+    job: RunJob,
+    summary: ExecutionSummary,
+    highlights: AuditHighlights,
+) -> str | None:
+    has_data = any(
+        (
+            highlights.files_written,
+            highlights.files_read,
+            highlights.network_connections,
+            highlights.subprocesses,
+            highlights.top_events,
+        ),
+    )
+    if not has_data:
+        return None
+    output_path = Path("/tmp") / f"audit-report-{run_id}.html"
+    payload = _build_html_report(job=job, summary=summary, highlights=highlights)
+    output_path.write_text(payload, encoding="utf-8")
+    return str(output_path)
+
+
+def _build_html_report(job: RunJob, summary: ExecutionSummary, highlights: AuditHighlights) -> str:
+    subtitle = f"{job.package_name}=={job.version} | mode={job.mode.value} | run_id={job.run_id}"
+    return (
+        "<!doctype html>\n"
+        "<html lang='en'>\n"
+        "<head>\n"
+        "  <meta charset='utf-8' />\n"
+        "  <meta name='viewport' content='width=device-width, initial-scale=1' />\n"
+        "  <title>Snakehook Triage Report</title>\n"
+        "  <style>\n"
+        "    :root { --bg:#f4f8f6; --text:#1a2c24; --muted:#49675a; --card:#ffffff;"
+        " --ok:#1f8f4d; --bad:#b42318; --warn:#b26a00; --line:#d7e6df; }\n"
+        "    * { box-sizing:border-box; }\n"
+        "    body { margin:0; font-family:'Segoe UI',Tahoma,Verdana,sans-serif;"
+        " background:radial-gradient(circle at top left,#e9f7ef,#f4f8f6 45%,#eef4ff);"
+        " color:var(--text); }\n"
+        "    .wrap { max-width:1200px; margin:0 auto; padding:24px; }\n"
+        "    .hero { border:1px solid var(--line); border-radius:16px; background:var(--card);"
+        " padding:20px; box-shadow:0 10px 30px rgba(19,49,32,0.08); }\n"
+        "    .title { margin:0; font-size:30px; letter-spacing:0.2px; }\n"
+        "    .subtitle { margin:8px 0 0; color:var(--muted); font-size:14px; }\n"
+        "    .status { margin-top:14px; display:inline-block; padding:6px 12px;"
+        " border-radius:999px; font-weight:700; font-size:12px; text-transform:uppercase; }\n"
+        "    .status.ok { background:#e7f8ef; color:var(--ok); }\n"
+        "    .status.fail { background:#ffe8e6; color:var(--bad); }\n"
+        "    .status.timeout { background:#fff1df; color:var(--warn); }\n"
+        "    .grid { margin-top:18px; display:grid;"
+        " grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }\n"
+        "    .card { border:1px solid var(--line); border-radius:14px; background:var(--card);"
+        " box-shadow:0 8px 20px rgba(37,63,51,0.06); }\n"
+        "    .card h2 { margin:0; padding:14px 16px; font-size:16px;"
+        " border-bottom:1px solid var(--line); }\n"
+        "    .list { margin:0; padding:12px 16px 16px; list-style:none; }\n"
+        "    .list li { margin:0 0 8px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        " font-size:12px; line-height:1.45; background:#f8fbf9;"
+        " border:1px solid #e4efe9; border-radius:8px;"
+        " padding:8px 10px; word-break:break-word; }\n"
+        "    .empty { padding:14px 16px; color:var(--muted); font-size:13px; }\n"
+        "    .meta { margin-top:16px; border-top:1px solid var(--line); padding-top:12px;"
+        " font-size:13px; color:var(--muted); }\n"
+        "  </style>\n"
+        "</head>\n"
+        "<body>\n"
+        "  <div class='wrap'>\n"
+        "    <section class='hero'>\n"
+        "      <h1 class='title'>Snakehook Triage Report</h1>\n"
+        f"      <p class='subtitle'>{html.escape(subtitle)}</p>\n"
+        f"      {_render_status_badge(summary)}\n"
+        f"      <div class='meta'>{html.escape(summary.message)}</div>\n"
+        "    </section>\n"
+        "    <section class='grid'>\n"
+        f"{_render_html_card('Files Written', highlights.files_written)}\n"
+        f"{_render_html_card('Files Opened/Read', highlights.files_read)}\n"
+        f"{_render_html_card('Network Connections', highlights.network_connections)}\n"
+        f"{_render_html_card('Subprocess Activity', highlights.subprocesses)}\n"
+        f"{_render_html_card('Top Audit Events', highlights.top_events)}\n"
+        "    </section>\n"
+        "  </div>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _render_status_badge(summary: ExecutionSummary) -> str:
+    klass = "ok" if summary.ok else "fail"
+    label = "ok" if summary.ok else "failed"
+    if not summary.ok and "timed out" in summary.message.lower():
+        klass = "timeout"
+        label = "timed out"
+    return f"<span class='status {klass}'>{html.escape(label)}</span>"
+
+
+def _render_html_card(title: str, items: tuple[str, ...]) -> str:
+    if not items:
+        return (
+            "<article class='card'>"
+            f"<h2>{html.escape(title)}</h2>"
+            "<div class='empty'>No events captured.</div>"
+            "</article>"
+        )
+    rows = "".join(
+        f"<li>{html.escape(item)}</li>"
+        for item in items[:HTML_LIST_MAX_ITEMS]
+    )
+    extra_note = ""
+    if len(items) > HTML_LIST_MAX_ITEMS:
+        extra_note = f"<li>... +{len(items) - HTML_LIST_MAX_ITEMS} more</li>"
+    return (
+        "<article class='card'>"
+        f"<h2>{html.escape(title)}</h2>"
+        f"<ul class='list'>{rows}{extra_note}</ul>"
+        "</article>"
+    )

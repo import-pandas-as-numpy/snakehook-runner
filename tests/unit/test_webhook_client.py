@@ -58,7 +58,7 @@ async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> N
     monkeypatch.setattr("snakehook_runner.infra.webhook_client.httpx.AsyncClient", fake_client)
 
     client = DiscordWebhookClient("https://discord.example/webhook")
-    await client.send_summary(_summary("r1"), None)
+    await client.send_summary(_summary("r1"))
 
     assert len(created) == 1
     url, data, files = created[0].posts[0]
@@ -94,11 +94,37 @@ async def test_webhook_client_posts_with_attachment_and_closes_file(
     attachment.write_bytes(b"x")
 
     client = DiscordWebhookClient("https://discord.example/webhook")
-    await client.send_summary(_summary("r2"), str(attachment))
+    await client.send_summary(_summary("r2"), (str(attachment),))
 
     _, data, files = created[0].posts[0]
     payload = json.loads(data["payload_json"])
     embed = payload["embeds"][0]
-    assert "Attachment: `audit.jsonl.gz`" in embed["description"]
+    assert "Attachments: `audit.jsonl.gz`" in embed["description"]
     handle = files["files[0]"][1]
     assert handle.closed is True
+
+
+async def test_webhook_client_posts_multiple_attachments(monkeypatch, tmp_path: Path) -> None:
+    created: list[FakeAsyncClient] = []
+
+    def fake_client(*, timeout: float):
+        c = FakeAsyncClient(timeout=timeout)
+        created.append(c)
+        return c
+
+    monkeypatch.setattr("snakehook_runner.infra.webhook_client.httpx.AsyncClient", fake_client)
+    gzip_attachment = tmp_path / "audit.jsonl.gz"
+    gzip_attachment.write_bytes(b"x")
+    html_attachment = tmp_path / "audit-report.html"
+    html_attachment.write_text("<html></html>", encoding="utf-8")
+
+    client = DiscordWebhookClient("https://discord.example/webhook")
+    await client.send_summary(_summary("r3"), (str(gzip_attachment), str(html_attachment)))
+
+    _, data, files = created[0].posts[0]
+    payload = json.loads(data["payload_json"])
+    embed = payload["embeds"][0]
+    assert "`audit.jsonl.gz`" in embed["description"]
+    assert "`audit-report.html`" in embed["description"]
+    assert files["files[0]"][2] == "application/gzip"
+    assert files["files[1]"][2] == "text/html"

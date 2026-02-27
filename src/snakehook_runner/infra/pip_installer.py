@@ -18,7 +18,7 @@ from snakehook_runner.infra.process_runner import AsyncProcessRunner
 from snakehook_runner.infra.runtime_paths import site_packages_dir
 
 LOG = logging.getLogger(__name__)
-MAX_PIP_AUDIT_BYTES = 5_000_000
+MAX_PIP_AUDIT_BYTES = 50_000_000
 
 
 class RealPipInstaller:
@@ -161,11 +161,11 @@ def _build_pip_audit_sitecustomize() -> str:
         "\n"
         "path=os.getenv('SNAKEHOOK_AUDIT_PATH','').strip()\n"
         "if path:\n"
-        "    limit_raw=os.getenv('SNAKEHOOK_AUDIT_LIMIT','5000000').strip()\n"
+        "    limit_raw=os.getenv('SNAKEHOOK_AUDIT_LIMIT','50000000').strip()\n"
         "    try:\n"
         "        limit=max(0,int(limit_raw))\n"
         "    except ValueError:\n"
-        "        limit=5000000\n"
+        "        limit=50000000\n"
         "    _repr=reprlib.Repr()\n"
         "    _repr.maxother=200\n"
         "    _repr.maxstring=500\n"

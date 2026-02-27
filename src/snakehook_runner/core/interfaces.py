@@ -68,5 +68,9 @@ class SandboxExecutor(Protocol):
 
 
 class WebhookClient(Protocol):
-    async def send_summary(self, summary: WebhookSummary, attachment_path: str | None) -> None:
+    async def send_summary(
+        self,
+        summary: WebhookSummary,
+        attachment_paths: tuple[str, ...] = (),
+    ) -> None:
         raise NotImplementedError
