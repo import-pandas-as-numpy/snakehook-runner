@@ -141,3 +141,13 @@ async def test_nsjail_command_skips_cgroup_pids_when_disabled() -> None:
     assert runner.command is not None
     command_text = " ".join(runner.command)
     assert "--cgroup_pids_max" not in command_text
+
+
+def test_audit_code_emits_timestamp_args_and_caller_fields() -> None:
+    job = RunJob(run_id="r5", package_name="sample", version="1.0")
+    source = nsjail_executor._build_audit_code(job=job, audit_path="/tmp/audit-r5.jsonl")
+    assert "'timestamp'" in source
+    assert "'args'" in source
+    assert "'caller'" in source
+    assert "sys._getframe(1)" in source
+    assert "json.dumps(payload" in source
