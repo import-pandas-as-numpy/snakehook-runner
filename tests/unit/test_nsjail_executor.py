@@ -151,3 +151,8 @@ def test_audit_code_emits_timestamp_args_and_caller_fields() -> None:
     assert "'caller'" in source
     assert "sys._getframe(1)" in source
     assert "json.dumps(payload" in source
+    assert "in_hook=False" in source
+    assert "if in_hook or written >= limit" in source
+    assert "except OSError" in source
+    assert "caller_file=frame_info.get('file')" in source
+    assert "if caller_file == '<string>'" in source

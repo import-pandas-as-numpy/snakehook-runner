@@ -39,6 +39,24 @@ class SandboxResult:
     audit_jsonl_path: str | None
 
 
+@dataclass(frozen=True)
+class WebhookSummary:
+    run_id: str
+    package_name: str
+    version: str
+    mode: RunMode
+    ok: bool
+    summary: str
+    timed_out: bool
+    stdout_bytes: int
+    stderr_bytes: int
+    file_path: str | None
+    entrypoint: str | None
+    module_name: str | None
+    files_written: tuple[str, ...]
+    network_connections: tuple[str, ...]
+
+
 class PipInstaller(Protocol):
     async def install(self, package_name: str, version: str) -> PipInstallResult:
         raise NotImplementedError
@@ -50,5 +68,5 @@ class SandboxExecutor(Protocol):
 
 
 class WebhookClient(Protocol):
-    async def send_summary(self, run_id: str, summary: str, attachment_path: str | None) -> None:
+    async def send_summary(self, summary: WebhookSummary, attachment_path: str | None) -> None:
         raise NotImplementedError

@@ -3,7 +3,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from snakehook_runner.core.interfaces import PipInstallResult, RunJob, RunMode, SandboxResult
+from snakehook_runner.core.interfaces import (
+    PipInstallResult,
+    RunJob,
+    RunMode,
+    SandboxResult,
+    WebhookSummary,
+)
 from snakehook_runner.core.orchestrator import TriageOrchestrator, WorkerHandler
 
 
@@ -25,10 +31,10 @@ class FakeSandboxExecutor:
 
 class FakeWebhookClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str | None]] = []
+        self.calls: list[tuple[WebhookSummary, str | None]] = []
 
-    async def send_summary(self, run_id: str, summary: str, attachment_path: str | None) -> None:
-        self.calls.append((run_id, summary, attachment_path))
+    async def send_summary(self, summary: WebhookSummary, attachment_path: str | None) -> None:
+        self.calls.append((summary, attachment_path))
 
 
 async def test_orchestrator_reports_pip_failure() -> None:
@@ -45,7 +51,7 @@ async def test_orchestrator_reports_pip_failure() -> None:
 
     assert result.ok is False
     assert "pip install failed" in result.message
-    assert webhook.calls[0][0] == "r1"
+    assert webhook.calls[0][0].run_id == "r1"
 
 
 async def test_orchestrator_attaches_install_audit_on_pip_failure(tmp_path: Path) -> None:
@@ -73,7 +79,7 @@ async def test_orchestrator_attaches_install_audit_on_pip_failure(tmp_path: Path
     assert result.attachment_path is not None
     assert result.attachment_path.endswith(".gz")
     assert Path(result.attachment_path).exists() is False
-    assert webhook.calls[0][2] == result.attachment_path
+    assert webhook.calls[0][1] == result.attachment_path
 
 
 async def test_orchestrator_reports_tail_of_pip_failure() -> None:
@@ -195,7 +201,7 @@ async def test_orchestrator_compresses_audit_and_reports_success(tmp_path: Path)
     assert result.attachment_path is not None
     assert result.attachment_path.endswith(".gz")
     assert Path(result.attachment_path).exists() is False
-    assert webhook.calls[0][2] == result.attachment_path
+    assert webhook.calls[0][1] == result.attachment_path
 
 
 async def test_orchestrator_merges_install_and_sandbox_audit(tmp_path: Path) -> None:
@@ -227,7 +233,7 @@ async def test_orchestrator_merges_install_and_sandbox_audit(tmp_path: Path) -> 
     assert result.ok is True
     assert result.attachment_path is not None
     assert Path(result.attachment_path).exists() is False
-    assert webhook.calls[0][2] == result.attachment_path
+    assert webhook.calls[0][1] == result.attachment_path
     assert install_audit.exists() is False
     assert run_audit.exists() is False
 
@@ -254,7 +260,9 @@ async def test_orchestrator_skips_missing_audit_file() -> None:
 
     assert result.ok is True
     assert result.attachment_path is None
-    assert webhook.calls[0] == ("r2b", "run ok; stdout=1B stderr=0B", None)
+    assert webhook.calls[0][0].run_id == "r2b"
+    assert webhook.calls[0][0].summary == "run ok; stdout=1B stderr=0B"
+    assert webhook.calls[0][1] is None
 
 
 async def test_worker_handler_logs_exceptions(caplog) -> None:
@@ -288,4 +296,57 @@ async def test_orchestrator_install_mode_skips_sandbox_execution() -> None:
     assert result.ok is True
     expected_message = "install ok"
     assert result.message == expected_message
-    assert webhook.calls[0] == ("r4", expected_message, None)
+    assert webhook.calls[0][0].run_id == "r4"
+    assert webhook.calls[0][0].summary == expected_message
+    assert webhook.calls[0][1] is None
+
+
+async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path) -> None:
+    install_audit = tmp_path / "install-audit.jsonl"
+    install_audit.write_text(
+        "\n".join(
+            [
+                (
+                    '{"timestamp":"2026-02-27T00:00:00+00:00","event":"open",'
+                    '"args":"(\'/tmp/install.log\', \'w\', 524865)","caller":{}}'
+                ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:01+00:00","event":"socket.connect",'
+                    '"args":"(<socket.socket fd=3>, (\'pypi.org\', 443))","caller":{}}'
+                ),
+            ],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_audit = tmp_path / "run-audit.jsonl"
+    run_audit.write_text(
+        (
+            '{"timestamp":"2026-02-27T00:00:02+00:00","event":"os.open",'
+            '"args":"(\'/tmp/output.txt\', 577, 420)","caller":{}}\n'
+        ),
+        encoding="utf-8",
+    )
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(
+            PipInstallResult(ok=True, stdout="", stderr="", audit_jsonl_path=str(install_audit)),
+        ),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(
+                ok=True,
+                stdout="x",
+                stderr="",
+                timed_out=False,
+                audit_jsonl_path=str(run_audit),
+            ),
+        ),
+        webhook_client=webhook,
+    )
+
+    await orch.execute(RunJob(run_id="r5", package_name="x", version="1", mode=RunMode.EXECUTE))
+
+    sent = webhook.calls[0][0]
+    assert "install: /tmp/install.log" in sent.files_written
+    assert "sandbox: /tmp/output.txt" in sent.files_written
+    assert "install: pypi.org:443" in sent.network_connections

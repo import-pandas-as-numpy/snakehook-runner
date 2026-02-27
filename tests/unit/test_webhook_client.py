@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from snakehook_runner.core.interfaces import RunMode, WebhookSummary
 from snakehook_runner.infra.webhook_client import DiscordWebhookClient
 
 
@@ -27,6 +28,25 @@ class FakeResponse:
         return None
 
 
+def _summary(run_id: str) -> WebhookSummary:
+    return WebhookSummary(
+        run_id=run_id,
+        package_name="requests",
+        version="2.32.0",
+        mode=RunMode.EXECUTE,
+        ok=True,
+        summary="done",
+        timed_out=False,
+        stdout_bytes=11,
+        stderr_bytes=3,
+        file_path="/tmp/script.py",
+        entrypoint="requests.cli:main",
+        module_name="requests",
+        files_written=("sandbox: /tmp/out.txt",),
+        network_connections=("sandbox: pypi.org:443",),
+    )
+
+
 async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> None:
     created: list[FakeAsyncClient] = []
 
@@ -38,16 +58,22 @@ async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> N
     monkeypatch.setattr("snakehook_runner.infra.webhook_client.httpx.AsyncClient", fake_client)
 
     client = DiscordWebhookClient("https://discord.example/webhook")
-    await client.send_summary("r1", "done", None)
+    await client.send_summary(_summary("r1"), None)
 
     assert len(created) == 1
     url, data, files = created[0].posts[0]
     assert url == "https://discord.example/webhook"
     payload = json.loads(data["payload_json"])
-    assert "**Snakehook Triage Result**" in payload["content"]
-    assert "Status: `OK`" in payload["content"]
-    assert "Run ID: `r1`" in payload["content"]
-    assert "```text\ndone\n```" in payload["content"]
+    assert len(payload["embeds"]) == 1
+    embed = payload["embeds"][0]
+    assert embed["title"] == "Snakehook Triage Result"
+    assert "```text\ndone\n```" in embed["description"]
+    fields = {field["name"]: field["value"] for field in embed["fields"]}
+    assert fields["Run ID"] == "`r1`"
+    assert fields["Status"] == "`OK`"
+    assert fields["Package"] == "`requests`"
+    assert "sandbox: /tmp/out.txt" in fields["Files Written"]
+    assert "sandbox: pypi.org:443" in fields["Network Connections"]
     assert files is None
 
 
@@ -68,10 +94,11 @@ async def test_webhook_client_posts_with_attachment_and_closes_file(
     attachment.write_bytes(b"x")
 
     client = DiscordWebhookClient("https://discord.example/webhook")
-    await client.send_summary("r2", "done", str(attachment))
+    await client.send_summary(_summary("r2"), str(attachment))
 
     _, data, files = created[0].posts[0]
     payload = json.loads(data["payload_json"])
-    assert "Attachment: `audit.jsonl.gz`" in payload["content"]
+    embed = payload["embeds"][0]
+    assert "Attachment: `audit.jsonl.gz`" in embed["description"]
     handle = files["files[0]"][1]
     assert handle.closed is True
