@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import ast
 import html
+import importlib.resources
 import json
 import logging
 import os
 import re
+import warnings
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from string import Template
+from urllib.parse import urlsplit
 
 from snakehook_runner.core.interfaces import (
     PipInstaller,
@@ -25,7 +30,9 @@ INSTALL_ERROR_MAX_CHARS = 350
 INSTALL_ERROR_MAX_LINES = 6
 HIGHLIGHT_MAX_ITEMS = 200
 HTML_LIST_MAX_ITEMS = 400
+HTML_LIST_PREVIEW_ITEMS = 16
 TOP_EVENT_LIMIT = 25
+NETWORK_EVENT_PREFIXES = ("socket.", "ssl.", "http.client.")
 
 
 @dataclass(frozen=True)
@@ -402,9 +409,10 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
                         files_read.pop(next(iter(files_read)))
                 connection = _extract_network_connection(event, args_text)
                 if connection:
-                    network_connections[f"{stage}: {connection}"] = None
-                    if len(network_connections) > HIGHLIGHT_MAX_ITEMS:
-                        network_connections.pop(next(iter(network_connections)))
+                    for item in connection:
+                        network_connections[f"{stage}: {item}"] = None
+                        if len(network_connections) > HIGHLIGHT_MAX_ITEMS:
+                            network_connections.pop(next(iter(network_connections)))
                 subprocess = _extract_subprocess(event, args_text)
                 if subprocess:
                     subprocesses[f"{stage}: {subprocess}"] = None
@@ -495,18 +503,194 @@ def _extract_read_file(event: str, args_text: str) -> str | None:
     return None
 
 
-def _extract_network_connection(event: str, args_text: str) -> str | None:
-    if event != "socket.connect":
-        return None
-    host_match = re.search(
-        r"\(\s*([\"']?[^\"',\)\s]+[\"']?)\s*,\s*(\d+)\s*\)",
-        args_text,
+def _extract_network_connection(event: str, args_text: str) -> tuple[str, ...]:
+    event_name = event.strip()
+    if not event_name:
+        return ()
+    parsed = _parse_literal_args(args_text)
+    rows: list[str] = []
+    action = _network_action_for_event(event_name)
+
+    if event_name in {"socket.getaddrinfo", "socket.getnameinfo"}:
+        for hostname in _extract_hostnames(parsed, args_text):
+            rows.append(f"dns {hostname}")
+        return _dedupe_rows(rows)
+
+    if _is_network_event(event_name):
+        for endpoint in _extract_network_endpoints(parsed, args_text):
+            rows.append(f"{action} {endpoint}")
+        return _dedupe_rows(rows)
+
+    return ()
+
+
+def _network_action_for_event(event: str) -> str:
+    lowered = event.lower()
+    if "connect" in lowered:
+        return "connect"
+    if "sendto" in lowered or "sendmsg" in lowered:
+        return "sendto"
+    if "bind" in lowered:
+        return "bind"
+    if "listen" in lowered:
+        return "listen"
+    if "ssl" in lowered or "tls" in lowered:
+        return "tls"
+    if event in {"socket.connect", "socket.connect_ex", "http.client.connect"}:
+        return "connect"
+    if event == "socket.bind":
+        return "bind"
+    if event == "socket.listen":
+        return "listen"
+    if event in {"socket.sendto", "socket.sendmsg", "socket.sendmsg_afalg"}:
+        return "sendto"
+    if event.startswith("ssl."):
+        return "tls"
+    return "network"
+
+
+def _is_network_event(event: str) -> bool:
+    lowered = event.lower()
+    if event.startswith(NETWORK_EVENT_PREFIXES):
+        return True
+    if "socket" in lowered:
+        return True
+    tokens = ("connect", "sendto", "sendmsg", "bind", "listen", "urlopen")
+    return any(token in lowered for token in tokens)
+
+
+def _extract_network_endpoints(parsed: object | None, args_text: str) -> tuple[str, ...]:
+    endpoints: list[str] = []
+    if parsed is not None:
+        endpoints.extend(_find_endpoints_in_value(parsed))
+    if args_text:
+        endpoints.extend(_find_endpoints_in_text(args_text))
+        endpoints.extend(_find_url_endpoints_in_text(args_text))
+    return _dedupe_rows(endpoints)
+
+
+def _extract_hostnames(parsed: object | None, args_text: str) -> tuple[str, ...]:
+    hosts: list[str] = []
+    if parsed is not None:
+        hosts.extend(_find_hostnames_in_value(parsed))
+    if args_text:
+        hosts.extend(_find_hostnames_in_text(args_text))
+    cleaned: list[str] = []
+    for host in hosts:
+        if not _is_likely_hostname(host):
+            continue
+        cleaned.append(host)
+    return _dedupe_rows(cleaned)
+
+
+def _find_endpoints_in_value(value: object) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, (tuple, list)):
+        if len(value) >= 2 and _is_likely_hostname(value[0]) and isinstance(value[1], int):
+            endpoint = _format_endpoint(value[0], value[1])
+            if endpoint:
+                found.append(endpoint)
+        for child in value:
+            found.extend(_find_endpoints_in_value(child))
+    elif isinstance(value, dict):
+        for child in value.values():
+            found.extend(_find_endpoints_in_value(child))
+    return found
+
+
+def _find_hostnames_in_value(value: object) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, (tuple, list)):
+        if value and _is_likely_hostname(value[0]):
+            found.append(str(value[0]))
+        for child in value:
+            found.extend(_find_hostnames_in_value(child))
+    elif isinstance(value, dict):
+        for child in value.values():
+            found.extend(_find_hostnames_in_value(child))
+    elif _is_likely_hostname(value):
+        found.append(str(value))
+    return found
+
+
+def _find_endpoints_in_text(text: str) -> list[str]:
+    matches = re.findall(
+        r"\(\s*['\"]?([a-zA-Z0-9_.:\-]+)['\"]?\s*,\s*(\d{1,5})(?:\s*,\s*\d+\s*,\s*\d+)?\s*\)",
+        text,
     )
-    if not host_match:
+    found: list[str] = []
+    for host, port_text in matches:
+        try:
+            port = int(port_text)
+        except ValueError:
+            continue
+        endpoint = _format_endpoint(host, port)
+        if endpoint:
+            found.append(endpoint)
+    return found
+
+
+def _find_url_endpoints_in_text(text: str) -> list[str]:
+    urls = re.findall(r"(?:https?|wss?)://[^\s\"'<>]+", text)
+    found: list[str] = []
+    for item in urls:
+        parts = urlsplit(item)
+        if not parts.hostname:
+            continue
+        port = parts.port
+        if port is None:
+            if parts.scheme in {"https", "wss"}:
+                port = 443
+            elif parts.scheme == "http":
+                port = 80
+        if port is None:
+            continue
+        endpoint = _format_endpoint(parts.hostname, port)
+        if endpoint:
+            found.append(endpoint)
+    return found
+
+
+def _find_hostnames_in_text(text: str) -> list[str]:
+    patterns = re.findall(
+        r"['\"]([a-zA-Z0-9_.\-]+)['\"]\s*,\s*\d{1,5}",
+        text,
+    )
+    urls = re.findall(r"(?:https?|wss?)://([a-zA-Z0-9_.\-]+)", text)
+    return patterns + urls
+
+
+def _format_endpoint(host: object, port: int) -> str | None:
+    host_text = str(host).strip().strip("\"'")
+    if not host_text or not (0 < port < 65536):
         return None
-    host = host_match.group(1).strip("\"'")
-    port = host_match.group(2)
-    return f"{host}:{port}"
+    if not _is_likely_hostname(host_text):
+        return None
+    return f"{host_text}:{port}"
+
+
+def _is_likely_hostname(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    host = value.strip().strip("\"'")
+    if not host:
+        return False
+    if host.startswith(("/", "<", "{")):
+        return False
+    if any(ch.isspace() for ch in host):
+        return False
+    if host in {"AF_INET", "AF_INET6"}:
+        return False
+    return True
+
+
+def _dedupe_rows(rows: list[str]) -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for row in rows:
+        if not row:
+            continue
+        seen[row] = None
+    return tuple(seen.keys())
 
 
 def _extract_subprocess(event: str, args_text: str) -> str | None:
@@ -533,7 +717,9 @@ def _normalize_command(value: object) -> str:
 
 def _parse_literal_args(args_text: str) -> object | None:
     try:
-        return ast.literal_eval(args_text)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            return ast.literal_eval(args_text)
     except (ValueError, SyntaxError):
         return None
 
@@ -567,65 +753,31 @@ def _write_html_report(
 
 def _build_html_report(job: RunJob, summary: ExecutionSummary, highlights: AuditHighlights) -> str:
     subtitle = f"{job.package_name}=={job.version} | mode={job.mode.value} | run_id={job.run_id}"
-    return (
-        "<!doctype html>\n"
-        "<html lang='en'>\n"
-        "<head>\n"
-        "  <meta charset='utf-8' />\n"
-        "  <meta name='viewport' content='width=device-width, initial-scale=1' />\n"
-        "  <title>Snakehook Triage Report</title>\n"
-        "  <style>\n"
-        "    :root { --bg:#f4f8f6; --text:#1a2c24; --muted:#49675a; --card:#ffffff;"
-        " --ok:#1f8f4d; --bad:#b42318; --warn:#b26a00; --line:#d7e6df; }\n"
-        "    * { box-sizing:border-box; }\n"
-        "    body { margin:0; font-family:'Segoe UI',Tahoma,Verdana,sans-serif;"
-        " background:radial-gradient(circle at top left,#e9f7ef,#f4f8f6 45%,#eef4ff);"
-        " color:var(--text); }\n"
-        "    .wrap { max-width:1200px; margin:0 auto; padding:24px; }\n"
-        "    .hero { border:1px solid var(--line); border-radius:16px; background:var(--card);"
-        " padding:20px; box-shadow:0 10px 30px rgba(19,49,32,0.08); }\n"
-        "    .title { margin:0; font-size:30px; letter-spacing:0.2px; }\n"
-        "    .subtitle { margin:8px 0 0; color:var(--muted); font-size:14px; }\n"
-        "    .status { margin-top:14px; display:inline-block; padding:6px 12px;"
-        " border-radius:999px; font-weight:700; font-size:12px; text-transform:uppercase; }\n"
-        "    .status.ok { background:#e7f8ef; color:var(--ok); }\n"
-        "    .status.fail { background:#ffe8e6; color:var(--bad); }\n"
-        "    .status.timeout { background:#fff1df; color:var(--warn); }\n"
-        "    .grid { margin-top:18px; display:grid;"
-        " grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }\n"
-        "    .card { border:1px solid var(--line); border-radius:14px; background:var(--card);"
-        " box-shadow:0 8px 20px rgba(37,63,51,0.06); }\n"
-        "    .card h2 { margin:0; padding:14px 16px; font-size:16px;"
-        " border-bottom:1px solid var(--line); }\n"
-        "    .list { margin:0; padding:12px 16px 16px; list-style:none; }\n"
-        "    .list li { margin:0 0 8px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
-        " font-size:12px; line-height:1.45; background:#f8fbf9;"
-        " border:1px solid #e4efe9; border-radius:8px;"
-        " padding:8px 10px; word-break:break-word; }\n"
-        "    .empty { padding:14px 16px; color:var(--muted); font-size:13px; }\n"
-        "    .meta { margin-top:16px; border-top:1px solid var(--line); padding-top:12px;"
-        " font-size:13px; color:var(--muted); }\n"
-        "  </style>\n"
-        "</head>\n"
-        "<body>\n"
-        "  <div class='wrap'>\n"
-        "    <section class='hero'>\n"
-        "      <h1 class='title'>Snakehook Triage Report</h1>\n"
-        f"      <p class='subtitle'>{html.escape(subtitle)}</p>\n"
-        f"      {_render_status_badge(summary)}\n"
-        f"      <div class='meta'>{html.escape(summary.message)}</div>\n"
-        "    </section>\n"
-        "    <section class='grid'>\n"
-        f"{_render_html_card('Files Written', highlights.files_written)}\n"
-        f"{_render_html_card('Files Opened/Read', highlights.files_read)}\n"
-        f"{_render_html_card('Network Connections', highlights.network_connections)}\n"
-        f"{_render_html_card('Subprocess Activity', highlights.subprocesses)}\n"
-        f"{_render_html_card('Top Audit Events', highlights.top_events)}\n"
-        "    </section>\n"
-        "  </div>\n"
-        "</body>\n"
-        "</html>\n"
+    cards_html = "".join(
+        (
+            _render_html_card("Files Written", highlights.files_written),
+            _render_html_card("Files Opened/Read", highlights.files_read),
+            _render_html_card("Network Activity", highlights.network_connections),
+            _render_html_card("Subprocess Activity", highlights.subprocesses),
+            _render_html_card("Top Audit Events", highlights.top_events),
+        ),
     )
+    return _load_html_template().substitute(
+        SUBTITLE=html.escape(subtitle),
+        STATUS_BADGE=_render_status_badge(summary),
+        SUMMARY_MESSAGE=html.escape(summary.message),
+        CARDS_HTML=cards_html,
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_html_template() -> Template:
+    template = (
+        importlib.resources.files("snakehook_runner")
+        .joinpath("templates/audit_report.html")
+        .read_text(encoding="utf-8")
+    )
+    return Template(template)
 
 
 def _render_status_badge(summary: ExecutionSummary) -> str:
@@ -645,16 +797,34 @@ def _render_html_card(title: str, items: tuple[str, ...]) -> str:
             "<div class='empty'>No events captured.</div>"
             "</article>"
         )
+    capped = items[:HTML_LIST_MAX_ITEMS]
     rows = "".join(
-        f"<li>{html.escape(item)}</li>"
-        for item in items[:HTML_LIST_MAX_ITEMS]
+        (
+            f"<li class='row{' row--hidden' if idx >= HTML_LIST_PREVIEW_ITEMS else ''}'>"
+            f"{html.escape(item)}</li>"
+        )
+        for idx, item in enumerate(capped)
     )
     extra_note = ""
+    hidden_count = max(0, len(capped) - HTML_LIST_PREVIEW_ITEMS)
     if len(items) > HTML_LIST_MAX_ITEMS:
-        extra_note = f"<li>... +{len(items) - HTML_LIST_MAX_ITEMS} more</li>"
+        extra_note = (
+            "<li class='row row--meta'>"
+            f"... +{len(items) - HTML_LIST_MAX_ITEMS} more omitted due to report cap"
+            "</li>"
+        )
+    toggle = ""
+    if hidden_count > 0:
+        toggle = (
+            "<button class='toggle' type='button' data-toggle='rows' "
+            f"data-more='Show {hidden_count} more' data-less='Show less'>"
+            f"Show {hidden_count} more"
+            "</button>"
+        )
     return (
         "<article class='card'>"
         f"<h2>{html.escape(title)}</h2>"
-        f"<ul class='list'>{rows}{extra_note}</ul>"
+        f"<div class='list-wrap'><ul class='list'>{rows}{extra_note}</ul></div>"
+        f"{toggle}"
         "</article>"
     )

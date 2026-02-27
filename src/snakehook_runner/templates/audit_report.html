@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Snakehook Triage Report</title>
+  <style>
+    :root { --bg:#f3f6f9; --text:#132030; --muted:#4a6178; --line:#d8e1ea; --card:#ffffff; --ok:#157e45; --bad:#b42318; --warn:#9a6700; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif; color:var(--text); background:
+      radial-gradient(1200px 500px at 0% -10%, #e7eef9 0%, transparent 60%),
+      radial-gradient(900px 420px at 100% 0%, #f5f0e6 0%, transparent 60%),
+      var(--bg); }
+    .wrap { max-width:1280px; margin:0 auto; padding:24px; }
+    .hero { border:1px solid var(--line); border-radius:16px; background:var(--card); padding:20px; box-shadow:0 14px 36px rgba(14,31,53,.08); }
+    .title { margin:0; font-size:30px; letter-spacing:.15px; }
+    .subtitle { margin:8px 0 0; color:var(--muted); font-size:14px; }
+    .status { margin-top:14px; display:inline-block; padding:6px 12px; border-radius:999px; font-weight:700; font-size:12px; text-transform:uppercase; }
+    .status.ok { background:#eaf8ef; color:var(--ok); }
+    .status.fail { background:#ffecea; color:var(--bad); }
+    .status.timeout { background:#fff4df; color:var(--warn); }
+    .meta { margin-top:16px; border-top:1px solid var(--line); padding-top:12px; color:var(--muted); font-size:13px; }
+    .grid { margin-top:18px; display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+    .card { border:1px solid var(--line); border-radius:14px; background:var(--card); box-shadow:0 10px 24px rgba(19,32,48,.06); display:flex; flex-direction:column; min-height:160px; }
+    .card h2 { margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-size:16px; letter-spacing:.2px; }
+    .list-wrap { max-height:360px; overflow:auto; }
+    .list { list-style:none; margin:0; padding:12px 16px 0; }
+    .row { margin:0 0 8px; padding:8px 10px; border-radius:8px; border:1px solid #e3e9f0; background:#f8fafc; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-word; }
+    .row--meta { color:var(--muted); font-family:"IBM Plex Sans", "Segoe UI", Tahoma, sans-serif; }
+    .row--hidden { display:none; }
+    .toggle { margin:12px 16px 14px; border:1px solid #c7d2df; border-radius:8px; background:#fff; color:#1d3148; font-size:12px; font-weight:700; padding:7px 10px; cursor:pointer; align-self:flex-start; }
+    .toggle:hover { background:#f4f8fc; }
+    .empty { padding:14px 16px; color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1 class="title">Snakehook Triage Report</h1>
+      <p class="subtitle">$SUBTITLE</p>
+      $STATUS_BADGE
+      <div class="meta">$SUMMARY_MESSAGE</div>
+    </section>
+    <section class="grid">
+      $CARDS_HTML
+    </section>
+  </div>
+  <script>
+    document.querySelectorAll("[data-toggle='rows']").forEach((button) => {
+      button.addEventListener("click", () => {
+        const card = button.closest(".card");
+        if (!card) {
+          return;
+        }
+        const rows = card.querySelectorAll(".row--hidden");
+        const expanded = button.getAttribute("data-state") === "expanded";
+        rows.forEach((row) => {
+          row.style.display = expanded ? "none" : "";
+        });
+        button.setAttribute("data-state", expanded ? "collapsed" : "expanded");
+        button.textContent = expanded ? button.dataset.more : button.dataset.less;
+      });
+    });
+  </script>
+</body>
+</html>
