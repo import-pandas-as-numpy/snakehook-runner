@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 
 from snakehook_runner.core.interfaces import (
@@ -10,7 +11,14 @@ from snakehook_runner.core.interfaces import (
     SandboxResult,
     WebhookSummary,
 )
-from snakehook_runner.core.orchestrator import TriageOrchestrator, WorkerHandler
+from snakehook_runner.core.orchestrator import (
+    AuditHighlights,
+    ExecutionSummary,
+    TriageOrchestrator,
+    WorkerHandler,
+    _build_html_report,
+    _parse_literal_args,
+)
 
 
 class FakePipInstaller:
@@ -318,6 +326,10 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
                     '{"timestamp":"2026-02-27T00:00:01+00:00","event":"socket.connect",'
                     '"args":"(<socket.socket fd=3>, (\'pypi.org\', 443))","caller":{}}'
                 ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:01+00:00","event":"socket.getaddrinfo",'
+                    '"args":"(\'files.pythonhosted.org\', 443, 0, 1, 6)","caller":{}}'
+                ),
             ],
         )
         + "\n",
@@ -338,6 +350,14 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
                 (
                     '{"timestamp":"2026-02-27T00:00:04+00:00","event":"subprocess.Popen",'
                     '"args":"([\'python\', \'-c\', \'print(1)\'],)","caller":{}}'
+                ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:05+00:00","event":"socket.sendto",'
+                    '"args":"(b\'x\', (\'1.1.1.1\', 53))","caller":{}}'
+                ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:06+00:00","event":"socket.bind",'
+                    '"args":"(<socket.socket fd=4>, (\'0.0.0.0\', 8080))","caller":{}}'
                 ),
             ],
         )
@@ -366,5 +386,36 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
     sent = webhook.calls[0][0]
     assert "install: /tmp/install.log" in sent.files_written
     assert "sandbox: /tmp/output.txt" in sent.files_written
-    assert "install: pypi.org:443" in sent.network_connections
+    assert "install: connect pypi.org:443" in sent.network_connections
+    assert "install: dns files.pythonhosted.org" in sent.network_connections
+    assert "sandbox: sendto 1.1.1.1:53" in sent.network_connections
+    assert "sandbox: bind 0.0.0.0:8080" in sent.network_connections
     assert any(name.endswith(".html") for name in webhook.calls[0][1])
+
+
+def test_parse_literal_args_suppresses_invalid_escape_warnings() -> None:
+    args_text = "('\\\\.',)"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        parsed = _parse_literal_args(args_text)
+    assert parsed == ("\\.",)
+    syntax_warnings = [w for w in caught if issubclass(w.category, SyntaxWarning)]
+    assert syntax_warnings == []
+
+
+def test_build_html_report_collapses_large_lists() -> None:
+    job = RunJob(run_id="r-html", package_name="x", version="1", mode=RunMode.EXECUTE)
+    summary = ExecutionSummary(run_id="r-html", ok=True, message="ok", attachment_path=None)
+    highlights = AuditHighlights(
+        files_written=tuple(f"item-{i}" for i in range(20)),
+        files_read=(),
+        network_connections=(),
+        subprocesses=(),
+        top_events=("open: 20",),
+    )
+
+    report = _build_html_report(job=job, summary=summary, highlights=highlights)
+
+    assert "Show 4 more" in report
+    assert "data-toggle='rows'" in report
+    assert "row--hidden" in report
