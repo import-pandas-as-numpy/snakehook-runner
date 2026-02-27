@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from snakehook_runner.core.config import Settings
-from snakehook_runner.infra.pip_installer import RealPipInstaller, _dir_size
+from snakehook_runner.infra.pip_installer import (
+    RealPipInstaller,
+    _build_pip_audit_sitecustomize,
+    _dir_size,
+)
 from snakehook_runner.infra.process_runner import ProcessResult
 
 
@@ -143,3 +147,12 @@ def test_dir_size_handles_vanishing_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "stat", fake_stat)
 
     assert _dir_size(root) == 3
+
+
+def test_pip_audit_sitecustomize_emits_timestamp_args_and_caller_fields() -> None:
+    source = _build_pip_audit_sitecustomize()
+    assert "'timestamp'" in source
+    assert "'args'" in source
+    assert "'caller'" in source
+    assert "sys._getframe(1)" in source
+    assert "json.dumps(payload" in source
