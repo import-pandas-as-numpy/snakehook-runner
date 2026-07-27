@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from snakehook_runner.core.config import Settings
-from snakehook_runner.main import create_app
+from snakehook_runner.main import _configure_logging, create_app
 
 
 def _settings() -> Settings:
@@ -31,6 +33,17 @@ def test_ci_mock_only_requires_injected_handler(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("CI_MOCK_ONLY", "1")
     with pytest.raises(RuntimeError):
         create_app(settings=_settings())
+
+
+def test_http_client_request_logging_is_suppressed() -> None:
+    client_logger = logging.getLogger("httpx2")
+    original_level = client_logger.level
+    try:
+        client_logger.setLevel(logging.NOTSET)
+        _configure_logging()
+        assert client_logger.level == logging.WARNING
+    finally:
+        client_logger.setLevel(original_level)
 
 
 async def test_lifespan_starts_and_stops_worker_pool(monkeypatch: pytest.MonkeyPatch) -> None:

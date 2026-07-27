@@ -100,6 +100,7 @@ def create_app(
 
 
 def _configure_logging() -> None:
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     root_logger = logging.getLogger()
     if root_logger.handlers:
         return
