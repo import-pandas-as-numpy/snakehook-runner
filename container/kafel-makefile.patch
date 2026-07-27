@@ -1,0 +1,13 @@
+diff --git a/Makefile b/Makefile
+index 070a74a..77565ba 100644
+--- a/Makefile
++++ b/Makefile
+@@ -16,7 +16,7 @@
+ #   limitations under the License.
+ #
+
+-SUBDIRS:=src tools test
++SUBDIRS:=src tools
+
+ include build/Makefile.mk
+

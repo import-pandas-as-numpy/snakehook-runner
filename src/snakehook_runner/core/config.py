@@ -17,13 +17,12 @@ class Settings:
     rlimit_cpu_sec: int
     rlimit_as_mb: int
     cgroup_pids_max: int
-    enable_cgroup_pids_limit: bool
+    cgroup_mem_max_bytes: int
+    cgroup_cpu_ms_per_sec: int
     rlimit_nofile: int
-    pip_cache_dir: str
     max_download_bytes: int
     package_denylist: tuple[str, ...]
     dns_resolvers: tuple[str, ...]
-
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -37,17 +36,26 @@ class Settings:
         return cls(
             api_token=api_token,
             discord_webhook_url=webhook,
-            max_concurrency=_int_env("MAX_CONCURRENCY", 2, minimum=1),
+            max_concurrency=_int_env("MAX_CONCURRENCY", 1, minimum=1, maximum=1),
             queue_limit=_int_env("QUEUE_LIMIT", 20, minimum=1),
             per_ip_rate_limit=_int_env("PER_IP_RATE_LIMIT", 30, minimum=1),
             per_ip_rate_window_sec=_int_env("PER_IP_RATE_WINDOW_SEC", 60, minimum=1),
             run_timeout_sec=_int_env("RUN_TIMEOUT_SEC", 45, minimum=1),
             rlimit_cpu_sec=_int_env("RLIMIT_CPU_SEC", 30, minimum=1),
             rlimit_as_mb=_int_env("RLIMIT_AS_MB", 1024, minimum=128),
-            cgroup_pids_max=_int_env("CGROUP_PIDS_MAX", 128, minimum=8),
-            enable_cgroup_pids_limit=_bool_env("ENABLE_CGROUP_PIDS_LIMIT", True),
+            cgroup_pids_max=_int_env("CGROUP_PIDS_MAX", 64, minimum=8),
+            cgroup_mem_max_bytes=_int_env(
+                "CGROUP_MEM_MAX_BYTES",
+                1_073_741_824,
+                minimum=134_217_728,
+            ),
+            cgroup_cpu_ms_per_sec=_int_env(
+                "CGROUP_CPU_MS_PER_SEC",
+                800,
+                minimum=1,
+                maximum=1000,
+            ),
             rlimit_nofile=_int_env("RLIMIT_NOFILE", 1024, minimum=64),
-            pip_cache_dir=os.getenv("PIP_CACHE_DIR", "/var/cache/pip"),
             max_download_bytes=_int_env("MAX_DOWNLOAD_BYTES", 300_000_000, minimum=1),
             package_denylist=denylist,
             dns_resolvers=_parse_dns_resolvers(
@@ -63,24 +71,14 @@ def _required(name: str) -> str:
     return value
 
 
-def _int_env(name: str, default: int, minimum: int) -> int:
+def _int_env(name: str, default: int, minimum: int, maximum: int | None = None) -> int:
     raw = os.getenv(name)
     value = default if raw is None else int(raw)
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}")
     return value
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be one of: 1,0,true,false,yes,no,on,off")
 
 
 def _parse_dns_resolvers(raw: str) -> tuple[str, ...]:

@@ -6,16 +6,22 @@ from pathlib import Path
 
 from snakehook_runner.core.config import Settings
 from snakehook_runner.core.interfaces import RunJob, SandboxResult
-from snakehook_runner.infra.process_runner import AsyncProcessRunner
-from snakehook_runner.infra.runtime_paths import JAIL_WORK_DIR, site_packages_dir
+from snakehook_runner.infra.process_runner import ProcessRunner
+from snakehook_runner.infra.runtime_paths import (
+    JAILED_JOB_DIR,
+    JAILED_SITE_DIR,
+    code_dir,
+    job_dir,
+)
 
 NSJAIL_CONFIG_PATH_DEFAULT = "/etc/nsjail.cfg"
+NSJAIL_CHROOT_PATH = "/app/nsjail/rootfs"
 MAX_AUDIT_BYTES = 50_000_000
 PYTHON_ENV_BIN = "/usr/bin/env"
 PYTHON_NAME_DEFAULT = "/usr/local/bin/python3"
 NSJAIL_USER_DEFAULT = "65534"
 NSJAIL_GROUP_DEFAULT = "65534"
-NSJAIL_DISABLE_CLONE_NEWUSER_DEFAULT = "1"
+ANALYSIS_HOSTS_PATH = "/run/snakehook/analysis-hosts"
 RUNTIME_BINDMOUNTS_RO: tuple[tuple[str, str], ...] = (
     ("/usr", "/usr"),
     ("/usr/local", "/usr/local"),
@@ -23,39 +29,43 @@ RUNTIME_BINDMOUNTS_RO: tuple[tuple[str, str], ...] = (
     ("/lib", "/lib"),
     ("/lib64", "/lib64"),
     ("/etc/ssl/certs", "/etc/ssl/certs"),
-    ("/etc/resolv.conf", "/etc/resolv.conf"),
-    ("/etc/hosts", "/etc/hosts"),
-)
-RUNTIME_BINDMOUNTS_RW: tuple[tuple[str, str], ...] = (
-    ("/tmp", "/tmp"),
-    (JAIL_WORK_DIR, JAIL_WORK_DIR),
+    (ANALYSIS_HOSTS_PATH, "/etc/hosts"),
 )
 LOG = logging.getLogger(__name__)
 
 
 class NsJailSandboxExecutor:
-    def __init__(self, process_runner: AsyncProcessRunner, settings: Settings) -> None:
+    def __init__(self, process_runner: ProcessRunner, settings: Settings) -> None:
         self._runner = process_runner
         self._settings = settings
 
     async def run(self, job: RunJob) -> SandboxResult:
-        audit_path = str(Path("/tmp") / f"audit-{job.run_id}.jsonl")
+        host_job_dir = job_dir(job.run_id)
+        host_code_dir = code_dir(job.run_id)
+        host_audit_path = host_job_dir / "execute-audit.jsonl"
+        jailed_audit_path = f"{JAILED_JOB_DIR}/execute-audit.jsonl"
         LOG.info(
             "sandbox run start run_id=%s package=%s version=%s mode=%s audit_path=%s",
             job.run_id,
             job.package_name,
             job.version,
             job.mode.value,
-            audit_path,
+            host_audit_path,
         )
-        audit_code = _build_audit_code(job=job, audit_path=audit_path)
+        audit_code = _build_audit_code(job=job, audit_path=jailed_audit_path)
         env = minimal_process_env(
             {
-                "PYTHONPATH": site_packages_dir(job.package_name, job.version),
+                "PYTHONPATH": JAILED_SITE_DIR,
             },
         )
         command = [
-            *build_nsjail_prefix(self._settings, jailed_env=env),
+            *build_nsjail_prefix(
+                self._settings,
+                host_job_dir=host_job_dir,
+                host_code_dir=host_code_dir,
+                code_read_only=True,
+                jailed_env=env,
+            ),
             "--",
             *jailed_python_command(),
             "-c",
@@ -63,7 +73,7 @@ class NsJailSandboxExecutor:
         ]
         result = await self._runner.run(
             command=command,
-            timeout_sec=self._settings.run_timeout_sec,
+            timeout_sec=self._settings.run_timeout_sec + 5,
             env=env,
         )
         LOG.info(
@@ -82,60 +92,69 @@ class NsJailSandboxExecutor:
             stdout=result.stdout,
             stderr=result.stderr,
             timed_out=result.timed_out,
-            audit_jsonl_path=audit_path,
+            audit_jsonl_path=str(host_audit_path),
         )
 
 
 def build_nsjail_prefix(
     settings: Settings,
+    host_job_dir: Path,
+    host_code_dir: Path,
+    code_read_only: bool,
     jailed_env: dict[str, str] | None = None,
 ) -> list[str]:
     config_path = os.getenv("NSJAIL_CONFIG_PATH", NSJAIL_CONFIG_PATH_DEFAULT)
-    chroot_path = os.getenv("NSJAIL_CHROOT_PATH", "").strip()
-    jail_user = os.getenv("NSJAIL_USER", NSJAIL_USER_DEFAULT).strip() or NSJAIL_USER_DEFAULT
-    jail_group = os.getenv("NSJAIL_GROUP", NSJAIL_GROUP_DEFAULT).strip() or NSJAIL_GROUP_DEFAULT
-    disable_clone_newuser = _bool_env(
-        os.getenv("NSJAIL_DISABLE_CLONE_NEWUSER", NSJAIL_DISABLE_CLONE_NEWUSER_DEFAULT),
+    _require_paths(
+        config_path,
+        NSJAIL_CHROOT_PATH,
+        host_job_dir,
+        host_code_dir,
+        *(source for source, _ in RUNTIME_BINDMOUNTS_RO),
     )
     command = [
         "nsjail",
         "--config",
         config_path,
         "--user",
-        jail_user,
+        f"{NSJAIL_USER_DEFAULT}:{NSJAIL_USER_DEFAULT}:1",
         "--group",
-        jail_group,
+        f"{NSJAIL_GROUP_DEFAULT}:{NSJAIL_GROUP_DEFAULT}:1",
         "--time_limit",
         str(settings.run_timeout_sec),
         "--rlimit_cpu",
         str(settings.rlimit_cpu_sec),
         "--rlimit_as",
         str(settings.rlimit_as_mb),
+        "--rlimit_fsize",
+        "64",
         "--rlimit_nofile",
         str(settings.rlimit_nofile),
+        "--cgroup_pids_max",
+        str(settings.cgroup_pids_max),
+        "--cgroup_mem_max",
+        str(settings.cgroup_mem_max_bytes),
+        "--cgroup_mem_swap_max",
+        "0",
+        "--cgroup_cpu_ms_per_sec",
+        str(settings.cgroup_cpu_ms_per_sec),
+        "--use_cgroupv2",
+        "--chroot",
+        NSJAIL_CHROOT_PATH,
     ]
-    for source, target in _existing_bindmounts(RUNTIME_BINDMOUNTS_RO):
+    for source, target in RUNTIME_BINDMOUNTS_RO:
         command.extend(["--bindmount_ro", f"{source}:{target}"])
-    for source, target in _existing_bindmounts(RUNTIME_BINDMOUNTS_RW):
-        command.extend(["--bindmount", f"{source}:{target}"])
-    command.extend(["--bindmount_ro", f"{settings.pip_cache_dir}:{settings.pip_cache_dir}"])
-    if settings.enable_cgroup_pids_limit:
-        command.extend(["--cgroup_pids_max", str(settings.cgroup_pids_max)])
-    if disable_clone_newuser:
-        command.append("--disable_clone_newuser")
-    if chroot_path:
-        command.extend(["--chroot", chroot_path])
+    command.extend(["--bindmount", f"{host_job_dir}:{JAILED_JOB_DIR}"])
+    code_mount_flag = "--bindmount_ro" if code_read_only else "--bindmount"
+    command.extend([code_mount_flag, f"{host_code_dir}:{JAILED_SITE_DIR}"])
     for key, value in _sorted_env(jailed_env):
         command.extend(["--env", f"{key}={value}"])
     return command
 
 
-def _existing_bindmounts(entries: tuple[tuple[str, str], ...]) -> list[tuple[str, str]]:
-    return [(source, target) for source, target in entries if os.path.exists(source)]
-
-
-def _bool_env(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+def _require_paths(*paths: str | Path) -> None:
+    missing = [os.fspath(path) for path in paths if not Path(path).exists()]
+    if missing:
+        raise RuntimeError(f"required nsjail path missing: {', '.join(missing)}")
 
 
 def _sorted_env(jailed_env: dict[str, str] | None) -> list[tuple[str, str]]:

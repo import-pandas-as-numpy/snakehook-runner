@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from snakehook_runner.core.interfaces import RunMode, WebhookSummary
 from snakehook_runner.infra.webhook_client import DiscordWebhookClient
@@ -10,7 +11,7 @@ from snakehook_runner.infra.webhook_client import DiscordWebhookClient
 class FakeAsyncClient:
     def __init__(self, timeout: float) -> None:
         self.timeout = timeout
-        self.posts: list[tuple[str, dict, object]] = []
+        self.posts: list[tuple[str, dict[str, str], Any]] = []
 
     async def __aenter__(self):
         return self
@@ -18,7 +19,12 @@ class FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def post(self, url: str, data: dict, files=None):
+    async def post(
+        self,
+        url: str,
+        data: dict[str, str],
+        files: Any = None,
+    ) -> FakeResponse:
         self.posts.append((url, data, files))
         return FakeResponse()
 
@@ -43,7 +49,10 @@ def _summary(run_id: str) -> WebhookSummary:
         entrypoint="requests.cli:main",
         module_name="requests",
         files_written=("sandbox: /tmp/out.txt",),
+        files_read=("sandbox: /etc/hosts",),
         network_connections=("sandbox: pypi.org:443",),
+        subprocesses=("sandbox: python -c print(1)",),
+        imports=("sandbox: requests <- /site/requests/__init__.py",),
     )
 
 
@@ -73,7 +82,10 @@ async def test_webhook_client_posts_summary_without_attachment(monkeypatch) -> N
     assert fields["Status"] == "`OK`"
     assert fields["Package"] == "`requests`"
     assert "sandbox: /tmp/out.txt" in fields["Files Written"]
-    assert "sandbox: pypi.org:443" in fields["Network Connections"]
+    assert "sandbox: /etc/hosts" in fields["Files Opened/Read"]
+    assert "sandbox: pypi.org:443" in fields["Network Activity"]
+    assert "sandbox: python -c print(1)" in fields["Subprocess Activity"]
+    assert "sandbox: requests <- /site/requests/__init__.py" in fields["Imports"]
     assert files is None
 
 

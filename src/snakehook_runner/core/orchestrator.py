@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from string import Template
+from typing import Protocol
 from urllib.parse import urlsplit
 
 from snakehook_runner.core.interfaces import (
@@ -24,6 +25,7 @@ from snakehook_runner.core.interfaces import (
     WebhookSummary,
 )
 from snakehook_runner.infra.compression import gzip_file
+from snakehook_runner.infra.runtime_paths import cleanup_job_dir
 
 LOG = logging.getLogger(__name__)
 INSTALL_ERROR_MAX_CHARS = 350
@@ -62,7 +64,7 @@ class TriageOrchestrator:
             job.version,
             job.mode.value,
         )
-        install = await self._pip_installer.install(job.package_name, job.version)
+        install = await self._pip_installer.install(job)
         install_audit_path = _existing_path(install.audit_jsonl_path)
         install_highlights = _collect_audit_highlights(("install", install_audit_path))
         if not install.ok:
@@ -200,8 +202,12 @@ class TriageOrchestrator:
         return summary
 
 
+class Orchestrator(Protocol):
+    async def execute(self, job: RunJob) -> ExecutionSummary: ...
+
+
 class WorkerHandler:
-    def __init__(self, orchestrator: TriageOrchestrator) -> None:
+    def __init__(self, orchestrator: Orchestrator) -> None:
         self._orchestrator = orchestrator
 
     async def __call__(self, job: RunJob) -> None:
@@ -209,6 +215,8 @@ class WorkerHandler:
             await self._orchestrator.execute(job)
         except Exception:
             LOG.exception("triage run failed run_id=%s", job.run_id)
+        finally:
+            cleanup_job_dir(job.run_id)
 
 
 def _summarize_install_failure(install_result: PipInstallResult) -> str:
@@ -349,6 +357,7 @@ class AuditHighlights:
     files_read: tuple[str, ...]
     network_connections: tuple[str, ...]
     subprocesses: tuple[str, ...]
+    imports: tuple[str, ...]
     top_events: tuple[str, ...]
 
 
@@ -375,7 +384,10 @@ def _build_webhook_summary(
         entrypoint=job.entrypoint,
         module_name=job.module_name,
         files_written=highlights.files_written,
+        files_read=highlights.files_read,
         network_connections=highlights.network_connections,
+        subprocesses=highlights.subprocesses,
+        imports=highlights.imports,
     )
 
 
@@ -384,6 +396,7 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
     files_read: dict[str, None] = {}
     network_connections: dict[str, None] = {}
     subprocesses: dict[str, None] = {}
+    imports: dict[str, str] = {}
     event_counts: dict[str, int] = {}
     for stage, path in stage_paths:
         if not path:
@@ -398,12 +411,12 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
                 if event:
                     event_counts[event] = event_counts.get(event, 0) + 1
                 write_path = _extract_written_file(event, args_text)
-                if write_path:
+                if write_path and not _is_import_loader_code_io(record, write_path):
                     files_written[f"{stage}: {write_path}"] = None
                     if len(files_written) > HIGHLIGHT_MAX_ITEMS:
                         files_written.pop(next(iter(files_written)))
                 read_path = _extract_read_file(event, args_text)
-                if read_path:
+                if read_path and not _is_import_loader_code_io(record, read_path):
                     files_read[f"{stage}: {read_path}"] = None
                     if len(files_read) > HIGHLIGHT_MAX_ITEMS:
                         files_read.pop(next(iter(files_read)))
@@ -418,6 +431,20 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
                     subprocesses[f"{stage}: {subprocess}"] = None
                     if len(subprocesses) > HIGHLIGHT_MAX_ITEMS:
                         subprocesses.pop(next(iter(subprocesses)))
+                imported = _extract_import(event, args_text)
+                if imported:
+                    module_name, origin = imported
+                    caller = record.get("caller")
+                    importer = "unknown"
+                    caller_file = caller.get("file") if isinstance(caller, dict) else None
+                    if caller_file:
+                        importer = str(caller_file)
+                    key = f"{stage}: {importer} -> {module_name}"
+                    if origin or key not in imports:
+                        suffix = f" <- {origin}" if origin else ""
+                        imports[key] = f"{key}{suffix}"
+                    if len(imports) > HIGHLIGHT_MAX_ITEMS:
+                        imports.pop(next(iter(imports)))
     top_events = tuple(
         f"{event}: {count}"
         for event, count in sorted(
@@ -430,6 +457,7 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
         files_read=tuple(files_read.keys()),
         network_connections=tuple(network_connections.keys()),
         subprocesses=tuple(subprocesses.keys()),
+        imports=tuple(imports.values()),
         top_events=top_events,
     )
 
@@ -458,21 +486,14 @@ def _extract_written_file(event: str, args_text: str) -> str | None:
     parsed = _parse_literal_args(args_text)
     if event == "open" and isinstance(parsed, tuple) and parsed:
         target = parsed[0] if len(parsed) > 0 else None
-        mode = parsed[1] if len(parsed) > 1 else "r"
-        if isinstance(target, (str, os.PathLike)) and _is_write_mode(str(mode)):
-            return os.fspath(target)
+        if isinstance(target, str) and _open_event_is_write(parsed):
+            return target
         return None
     if event == "os.open" and isinstance(parsed, tuple) and len(parsed) >= 2:
         target, flags = parsed[0], parsed[1]
-        if isinstance(target, (str, os.PathLike)) and isinstance(flags, int):
-            if flags & (
-                os.O_WRONLY
-                | os.O_RDWR
-                | os.O_APPEND
-                | os.O_CREAT
-                | os.O_TRUNC
-            ):
-                return os.fspath(target)
+        if isinstance(target, str) and isinstance(flags, int):
+            if _has_write_flags(flags):
+                return target
     return None
 
 
@@ -480,27 +501,27 @@ def _extract_read_file(event: str, args_text: str) -> str | None:
     parsed = _parse_literal_args(args_text)
     if event == "open" and isinstance(parsed, tuple) and parsed:
         target = parsed[0] if len(parsed) > 0 else None
-        mode = parsed[1] if len(parsed) > 1 else "r"
-        if isinstance(target, (str, os.PathLike)) and not _is_write_mode(str(mode)):
-            return os.fspath(target)
+        if isinstance(target, str) and not _open_event_is_write(parsed):
+            return target
         return None
     if event == "os.open" and isinstance(parsed, tuple) and len(parsed) >= 2:
         target, flags = parsed[0], parsed[1]
-        if not isinstance(target, (str, os.PathLike)) or not isinstance(flags, int):
+        if not isinstance(target, str) or not isinstance(flags, int):
             return None
-        has_write_flag = bool(
-            flags
-            & (
-                os.O_WRONLY
-                | os.O_RDWR
-                | os.O_APPEND
-                | os.O_CREAT
-                | os.O_TRUNC
-            ),
-        )
-        if not has_write_flag:
-            return os.fspath(target)
+        if not _has_write_flags(flags):
+            return target
     return None
+
+
+def _is_import_loader_code_io(record: dict[str, object], path: str) -> bool:
+    parsed_path = Path(path)
+    if "__pycache__" in parsed_path.parts and ".pyc." in parsed_path.name:
+        return True
+    caller = record.get("caller")
+    caller_file = caller.get("file") if isinstance(caller, dict) else None
+    if caller_file != "<frozen importlib._bootstrap_external>":
+        return False
+    return parsed_path.suffix in {".py", ".pyc"}
 
 
 def _extract_network_connection(event: str, args_text: str) -> tuple[str, ...]:
@@ -697,6 +718,10 @@ def _extract_subprocess(event: str, args_text: str) -> str | None:
     parsed = _parse_literal_args(args_text)
     if event in {"subprocess.Popen", "subprocess.run", "os.system"}:
         if isinstance(parsed, tuple) and parsed:
+            if event == "subprocess.Popen" and len(parsed) > 1:
+                argv = parsed[1]
+                if isinstance(argv, (list, tuple)):
+                    return _normalize_command(argv)
             return _normalize_command(parsed[0])
         if event == "os.system":
             return _truncate_middle(args_text, 120)
@@ -706,9 +731,26 @@ def _extract_subprocess(event: str, args_text: str) -> str | None:
     return None
 
 
+def _extract_import(event: str, args_text: str) -> tuple[str, str | None] | None:
+    if event != "import":
+        return None
+    parsed = _parse_literal_args(args_text)
+    if isinstance(parsed, tuple) and parsed and isinstance(parsed[0], str):
+        origin = parsed[1] if len(parsed) > 1 else None
+        return parsed[0], origin if isinstance(origin, str) else None
+    match = re.match(
+        r"""^\((?P<quote>['"])(?P<module>[A-Za-z0-9_.-]+)(?P=quote),\s*"""
+        r"""(?:(?P<origin_quote>['"])(?P<origin>[^'"]+)(?P=origin_quote)|None)""",
+        args_text,
+    )
+    if not match:
+        return None
+    return match.group("module"), match.group("origin")
+
+
 def _normalize_command(value: object) -> str:
-    if isinstance(value, (str, os.PathLike)):
-        return _truncate_middle(os.fspath(value), 120)
+    if isinstance(value, str):
+        return _truncate_middle(value, 120)
     if isinstance(value, (list, tuple)):
         rendered = " ".join(_normalize_command(part) for part in value[:8])
         return _truncate_middle(rendered, 120)
@@ -728,6 +770,27 @@ def _is_write_mode(mode: str) -> bool:
     return any(flag in mode for flag in ("w", "a", "x", "+"))
 
 
+def _has_write_flags(flags: int) -> bool:
+    return bool(
+        flags
+        & (
+            os.O_WRONLY
+            | os.O_RDWR
+            | os.O_APPEND
+            | os.O_CREAT
+            | os.O_TRUNC
+        )
+    )
+
+
+def _open_event_is_write(parsed: tuple[object, ...]) -> bool:
+    mode = parsed[1] if len(parsed) > 1 else "r"
+    if isinstance(mode, str):
+        return _is_write_mode(mode)
+    flags = parsed[2] if len(parsed) > 2 else 0
+    return isinstance(flags, int) and _has_write_flags(flags)
+
+
 def _write_html_report(
     run_id: str,
     job: RunJob,
@@ -740,6 +803,7 @@ def _write_html_report(
             highlights.files_read,
             highlights.network_connections,
             highlights.subprocesses,
+            highlights.imports,
             highlights.top_events,
         ),
     )
@@ -759,6 +823,7 @@ def _build_html_report(job: RunJob, summary: ExecutionSummary, highlights: Audit
             _render_html_card("Files Opened/Read", highlights.files_read),
             _render_html_card("Network Activity", highlights.network_connections),
             _render_html_card("Subprocess Activity", highlights.subprocesses),
+            _render_html_card("Imports", highlights.imports),
             _render_html_card("Top Audit Events", highlights.top_events),
         ),
     )

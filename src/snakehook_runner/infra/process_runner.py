@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Protocol
 
 MAX_CAPTURE_BYTES = 1_048_576
 LOG = logging.getLogger(__name__)
@@ -14,6 +15,15 @@ class ProcessResult:
     stdout: str
     stderr: str
     timed_out: bool
+
+
+class ProcessRunner(Protocol):
+    async def run(
+        self,
+        command: list[str],
+        timeout_sec: int,
+        env: dict[str, str] | None = None,
+    ) -> ProcessResult: ...
 
 
 class AsyncProcessRunner:
@@ -36,9 +46,10 @@ class AsyncProcessRunner:
         try:
             await asyncio.wait_for(proc.wait(), timeout=timeout_sec)
         except TimeoutError:
-            timed_out = True
-            proc.kill()
-            await proc.wait()
+            if proc.returncode is None:
+                timed_out = True
+                proc.kill()
+                await proc.wait()
 
         stdout_b, stdout_truncated = await stdout_task
         stderr_b, stderr_truncated = await stderr_task

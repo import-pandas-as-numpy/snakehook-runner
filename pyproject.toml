@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv-build==0.11.32"]
+build-backend = "uv_build"
 
 [project]
 name = "snakehook-runner"
@@ -9,17 +9,19 @@ description = "Public Python package triage sandbox runner"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi",
-  "uvicorn",
-  "httpx",
+  "fastapi==0.140.0",
+  "httpx2==2.9.1",
+  "packaging==26.2",
+  "uvicorn==0.51.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
-  "pytest-asyncio",
-  "pytest-cov",
-  "ruff",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov==7.1.0",
+  "ruff==0.16.0",
+  "ty==0.0.63",
 ]
 
 [tool.pytest.ini_options]
@@ -33,11 +35,5 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-snakehook_runner = ["templates/*.html"]
+[tool.uv-build]
+module-root = "src"

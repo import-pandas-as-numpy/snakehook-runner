@@ -40,10 +40,13 @@ class WorkerPool:
         if not self._started:
             return
         self._started = False
-        for _ in self._workers:
-            await self._queue.put(None)
+        for worker in self._workers:
+            worker.cancel()
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            self._queue.task_done()
 
     def submit(self, job: RunJob) -> bool:
         if not self._started:

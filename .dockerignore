@@ -1,0 +1,16 @@
+**
+!.dockerignore
+!README.md
+!pyproject.toml
+!uv.lock
+!container/
+!container/Dockerfile
+!container/build-requirements.txt
+!container/entrypoint.sh
+!container/kafel-makefile.patch
+!container/nsjail-user-net.patch
+!container/nsjail.cfg
+!container/nsjail.seccomp
+!container/pasta-embedded.patch
+!src/
+!src/**

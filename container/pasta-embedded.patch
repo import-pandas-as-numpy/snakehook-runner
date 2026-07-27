@@ -1,0 +1,13 @@
+diff --git a/passt.c b/passt.c
+index 3698dd6..dc453f4 100644
+--- a/passt.c
++++ b/passt.c
+@@ -339,8 +339,6 @@ int main(int argc, char **argv)
+ 	if (clock_gettime(CLOCK_MONOTONIC, &log_start))
+ 		die_perror("Failed to get CLOCK_MONOTONIC time");
+
+-	arch_avx2_exec(argv);
+-
+ 	isolate_initial(argc, argv);
+
+ 	sigemptyset(&sa.sa_mask);
