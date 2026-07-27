@@ -84,3 +84,12 @@ def write_rules_file(webhook_url: str, path: str, dns_resolvers: tuple[str, ...]
     target = Path(path)
     target.write_text(rules, encoding="utf-8")
     return str(target)
+
+
+def write_analysis_hosts_file(path: str) -> str:
+    lines = ["127.0.0.1 localhost"]
+    for hostname in ("pypi.org", "files.pythonhosted.org"):
+        lines.extend(f"{address} {hostname}" for address in resolve_ipv4(hostname))
+    target = Path(path)
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(target)

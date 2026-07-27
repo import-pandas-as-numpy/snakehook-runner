@@ -6,11 +6,16 @@ set -euo pipefail
 
 python - <<'PY'
 import os
-from snakehook_runner.infra.nftables_renderer import build_dns_resolver_allowlist, write_rules_file
+from snakehook_runner.infra.nftables_renderer import (
+    build_dns_resolver_allowlist,
+    write_analysis_hosts_file,
+    write_rules_file,
+)
 
 raw = os.getenv("DNS_RESOLVERS", "1.1.1.1,8.8.8.8")
 dns_resolvers = build_dns_resolver_allowlist(raw=raw)
 write_rules_file(os.environ["DISCORD_WEBHOOK_URL"], "/tmp/snakehook.nft", dns_resolvers)
+write_analysis_hosts_file("/run/snakehook/analysis-hosts")
 PY
 
 nft -f /tmp/snakehook.nft

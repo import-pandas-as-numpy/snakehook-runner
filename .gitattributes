@@ -1,0 +1,2 @@
+# Nested upstream diffs contain intentional context indentation.
+container/*.patch -whitespace

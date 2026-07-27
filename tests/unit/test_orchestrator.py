@@ -17,6 +17,7 @@ from snakehook_runner.core.orchestrator import (
     TriageOrchestrator,
     WorkerHandler,
     _build_html_report,
+    _collect_audit_highlights,
     _parse_literal_args,
 )
 
@@ -25,7 +26,7 @@ class FakePipInstaller:
     def __init__(self, result: PipInstallResult) -> None:
         self._result = result
 
-    async def install(self, package_name: str, version: str) -> PipInstallResult:
+    async def install(self, job: RunJob) -> PipInstallResult:
         return self._result
 
 
@@ -349,7 +350,9 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
                 ),
                 (
                     '{"timestamp":"2026-02-27T00:00:04+00:00","event":"subprocess.Popen",'
-                    '"args":"([\'python\', \'-c\', \'print(1)\'],)","caller":{}}'
+                    '"args":"(\'/usr/local/bin/python3\', '
+                    '[\'/usr/local/bin/python3\', \'-c\', \'print(1)\'], None, None)",'
+                    '"caller":{}}'
                 ),
                 (
                     '{"timestamp":"2026-02-27T00:00:05+00:00","event":"socket.sendto",'
@@ -358,6 +361,17 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
                 (
                     '{"timestamp":"2026-02-27T00:00:06+00:00","event":"socket.bind",'
                     '"args":"(<socket.socket fd=4>, (\'0.0.0.0\', 8080))","caller":{}}'
+                ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:07+00:00","event":"import",'
+                    '"args":"(\'requests.sessions\', None, [\'/site\'], '
+                    '[<_distutils_hack.DistutilsMetaFinder object>], [])",'
+                    '"caller":{"file":"/site/app.py"}}'
+                ),
+                (
+                    '{"timestamp":"2026-02-27T00:00:08+00:00","event":"import",'
+                    '"args":"(\'requests.sessions\', \'/site/requests/sessions.py\', '
+                    'None, None, None)","caller":{"file":"/site/app.py"}}'
                 ),
             ],
         )
@@ -386,10 +400,16 @@ async def test_orchestrator_extracts_files_and_network_from_audit(tmp_path: Path
     sent = webhook.calls[0][0]
     assert "install: /tmp/install.log" in sent.files_written
     assert "sandbox: /tmp/output.txt" in sent.files_written
+    assert "sandbox: /etc/hosts" in sent.files_read
     assert "install: connect pypi.org:443" in sent.network_connections
     assert "install: dns files.pythonhosted.org" in sent.network_connections
     assert "sandbox: sendto 1.1.1.1:53" in sent.network_connections
     assert "sandbox: bind 0.0.0.0:8080" in sent.network_connections
+    assert "sandbox: /usr/local/bin/python3 -c print(1)" in sent.subprocesses
+    assert (
+        "sandbox: /site/app.py -> requests.sessions <- /site/requests/sessions.py"
+        in sent.imports
+    )
     assert any(name.endswith(".html") for name in webhook.calls[0][1])
 
 
@@ -403,6 +423,46 @@ def test_parse_literal_args_suppresses_invalid_escape_warnings() -> None:
     assert syntax_warnings == []
 
 
+def test_collect_highlights_reports_imports_without_duplicate_loader_reads(
+    tmp_path: Path,
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        "\n".join(
+            (
+                (
+                    '{"event":"open","args":"(\'/site/sample.py\', \'r\', 524288)",'
+                    '"caller":{"file":"<frozen importlib._bootstrap_external>"}}'
+                ),
+                (
+                    '{"event":"import","args":"(\'sample\', None, [\'/site\'], '
+                    '[<finder object>], [])","caller":{"file":"/site/app.py"}}'
+                ),
+                (
+                    '{"event":"open","args":"(\'/work/data.json\', \'r\', 524288)",'
+                    '"caller":{"file":"/site/sample.py"}}'
+                ),
+                (
+                    '{"event":"open","args":"('
+                    "'/usr/local/lib/python3.13/__pycache__/sample.pyc.1234', "
+                    'None, 524481)","caller":{"file":"/site/sample.py"}}'
+                ),
+                (
+                    '{"event":"open","args":"(\'/work/flags-created.txt\', None, 524865)",'
+                    '"caller":{"file":"/site/sample.py"}}'
+                ),
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+    highlights = _collect_audit_highlights(("sandbox", str(audit)))
+
+    assert highlights.files_read == ("sandbox: /work/data.json",)
+    assert highlights.files_written == ("sandbox: /work/flags-created.txt",)
+    assert highlights.imports == ("sandbox: /site/app.py -> sample",)
+
+
 def test_build_html_report_collapses_large_lists() -> None:
     job = RunJob(run_id="r-html", package_name="x", version="1", mode=RunMode.EXECUTE)
     summary = ExecutionSummary(run_id="r-html", ok=True, message="ok", attachment_path=None)
@@ -411,6 +471,7 @@ def test_build_html_report_collapses_large_lists() -> None:
         files_read=(),
         network_connections=(),
         subprocesses=(),
+        imports=(),
         top_events=("open: 20",),
     )
 

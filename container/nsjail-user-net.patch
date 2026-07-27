@@ -1,0 +1,43 @@
+diff --git a/net.cc b/net.cc
+index ec5da3b..330bb5d 100644
+--- a/net.cc
++++ b/net.cc
+@@ -222,9 +222,17 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
+ 		}
+
+ 		std::string pid_str = std::to_string(pid);
++		std::string netns_path = "/proc/" + pid_str + "/ns/net";
+ 		std::vector<const char*> argv;
+
+ 		argv.push_back("pasta");
++		argv.push_back("--netns-only");
++		argv.push_back("--runas");
++		argv.push_back("0:65534");
++		argv.push_back("-T");
++		argv.push_back("none");
++		argv.push_back("-U");
++		argv.push_back("none");
+
+ 		bool ip4_enabled =
+ 		    !nsj->njc.user_net().ip().empty() || nsj->njc.user_net().enable_ip4_dhcp();
+@@ -315,7 +323,8 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
+ 			argv.push_back(nsj->njc.user_net().ns_iface().c_str());
+ 		}
+
+-		argv.push_back(pid_str.c_str());
++		argv.push_back("--netns");
++		argv.push_back(netns_path.c_str());
+ 		argv.push_back(nullptr);
+
+ 		int nullfd = TEMP_FAILURE_RETRY(open("/dev/null", O_RDWR));
+@@ -331,10 +340,6 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
+ 			PLOG_E("Cannot dup2('/dev/null', fd=%d)", STDOUT_FILENO);
+ 			_exit(EXIT_FAILURE);
+ 		}
+-		if (TEMP_FAILURE_RETRY(dup2(nullfd, STDERR_FILENO)) == -1) {
+-			PLOG_E("Cannot dup2('/dev/null', fd=%d)", STDERR_FILENO);
+-			_exit(EXIT_FAILURE);
+-		}
+ 		if (nullfd > STDERR_FILENO) {
+ 			close(nullfd);
+ 		}

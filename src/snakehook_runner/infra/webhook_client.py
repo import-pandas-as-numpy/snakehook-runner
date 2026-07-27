@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import BinaryIO
 
-import httpx
+import httpx2 as httpx
 
 from snakehook_runner.core.interfaces import WebhookSummary
 
@@ -25,8 +26,8 @@ class DiscordWebhookClient:
         attachment_paths: tuple[str, ...] = (),
     ) -> None:
         resolved_attachment_paths: list[str] = []
-        files: dict[str, tuple[str, object, str]] | None = None
-        opened_handles: list[object] = []
+        files: dict[str, tuple[str, BinaryIO, str]] | None = None
+        opened_handles: list[BinaryIO] = []
         for path in attachment_paths:
             if not Path(path).exists():
                 LOG.warning(
@@ -107,10 +108,34 @@ def _build_discord_payload(
                 "inline": False,
             },
             {
-                "name": "Network Connections",
+                "name": "Files Opened/Read",
+                "value": _render_list_field(
+                    summary.files_read,
+                    empty="No read events captured.",
+                ),
+                "inline": False,
+            },
+            {
+                "name": "Network Activity",
                 "value": _render_list_field(
                     summary.network_connections,
-                    empty="No connect events captured.",
+                    empty="No network events captured.",
+                ),
+                "inline": False,
+            },
+            {
+                "name": "Subprocess Activity",
+                "value": _render_list_field(
+                    summary.subprocesses,
+                    empty="No subprocess events captured.",
+                ),
+                "inline": False,
+            },
+            {
+                "name": "Imports",
+                "value": _render_list_field(
+                    summary.imports,
+                    empty="No import events captured.",
                 ),
                 "inline": False,
             },

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from snakehook_runner.core.config import Settings
+from snakehook_runner.core.interfaces import RunJob
 from snakehook_runner.infra.pip_installer import (
     RealPipInstaller,
     _build_pip_audit_sitecustomize,
@@ -26,11 +29,13 @@ class FakeRunner:
         self.command = command
         self.env = env
         if env and env.get("SNAKEHOOK_AUDIT_PATH"):
-            Path(env["SNAKEHOOK_AUDIT_PATH"]).write_text("event\n", encoding="utf-8")
+            mount = command[command.index("--bindmount") + 1]
+            host_job_dir = Path(mount.split(":", 1)[0])
+            (host_job_dir / "install-audit.jsonl").write_text("event\n", encoding="utf-8")
         return self._result
 
 
-def _settings(cache_dir: str, cap: int) -> Settings:
+def _settings(cap: int) -> Settings:
     return Settings(
         api_token="t",
         discord_webhook_url="https://discord.example/webhook",
@@ -42,47 +47,58 @@ def _settings(cache_dir: str, cap: int) -> Settings:
         rlimit_cpu_sec=30,
         rlimit_as_mb=1024,
         cgroup_pids_max=128,
-        enable_cgroup_pids_limit=True,
+        cgroup_mem_max_bytes=1_073_741_824,
+        cgroup_cpu_ms_per_sec=800,
         rlimit_nofile=1024,
-        pip_cache_dir=cache_dir,
         max_download_bytes=cap,
         package_denylist=("torch",),
         dns_resolvers=("1.1.1.1",),
     )
 
 
-async def test_pip_installer_uses_nsjail_with_readonly_cache_mount(tmp_path: Path) -> None:
-    cache_dir = tmp_path / "pip-cache"
-    cache_dir.mkdir()
+@pytest.fixture(autouse=True)
+def isolated_paths(monkeypatch, tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    code_root = tmp_path / "code"
+    work_root.mkdir()
+    code_root.mkdir()
+    monkeypatch.setenv("SNAKEHOOK_WORK_ROOT", str(work_root))
+    monkeypatch.setenv("SNAKEHOOK_CODE_ROOT", str(code_root))
+    monkeypatch.setattr(
+        "snakehook_runner.infra.nsjail_executor._require_paths",
+        lambda *paths: None,
+    )
+
+
+async def test_pip_installer_uses_nsjail_with_per_job_cache(tmp_path: Path) -> None:
     runner = FakeRunner(ProcessResult(returncode=0, stdout="ok", stderr="", timed_out=False))
     installer = RealPipInstaller(
         process_runner=runner,
-        settings=_settings(str(cache_dir), cap=10_000),
+        settings=_settings(cap=10_000),
     )
 
-    result = await installer.install("requests", "2.32.0")
+    result = await installer.install(RunJob("run-1", "requests", "2.32.0"))
 
     assert result.ok is True
     command_text = " ".join(runner.command or [])
     assert "nsjail" in command_text
-    assert f"--bindmount_ro {cache_dir}:{cache_dir}" in command_text
     assert "--env LD_LIBRARY_PATH=" in command_text
-    assert "--env PIP_CACHE_DIR=" in command_text
+    assert "--env PIP_CACHE_DIR=/work/pip-cache" in command_text
     assert "/usr/local/bin/python3 -m pip install requests==2.32.0" in command_text
-    assert "--target /opt/snakehook/work/site/requests-2.32.0" in command_text
+    assert "--target /site" in command_text
+    assert "--cache-dir /work/pip-cache" in command_text
+    assert f"--bindmount {tmp_path / 'code' / 'run-1'}:/site" in command_text
     assert result.audit_jsonl_path is not None
-    assert result.audit_jsonl_path.startswith("/tmp/pip-audit-")
+    assert result.audit_jsonl_path == str(
+        tmp_path / "work" / "run-1" / "install-audit.jsonl"
+    )
     assert runner.env is not None
     assert "SNAKEHOOK_AUDIT_PATH" in runner.env
     assert "SNAKEHOOK_AUDIT_LIMIT" in runner.env
-    assert "site/requests-2.32.0" in runner.env["PYTHONPATH"]
+    assert runner.env["PYTHONPATH"] == "/work/audit-bootstrap:/site"
 
 
 async def test_pip_installer_rejects_when_download_cap_exceeded(tmp_path: Path) -> None:
-    cache_dir = tmp_path / "pip-cache"
-    cache_dir.mkdir()
-    (cache_dir / "before.bin").write_bytes(b"x")
-
     class GrowingRunner(FakeRunner):
         async def run(
             self,
@@ -90,6 +106,9 @@ async def test_pip_installer_rejects_when_download_cap_exceeded(tmp_path: Path) 
             timeout_sec: int,
             env: dict[str, str] | None = None,
         ) -> ProcessResult:
+            mount = command[command.index("--bindmount") + 1]
+            cache_dir = Path(mount.split(":", 1)[0]) / "pip-cache"
+            cache_dir.mkdir()
             (cache_dir / "after.bin").write_bytes(b"y" * 20)
             return await super().run(command, timeout_sec, env)
 
@@ -97,27 +116,25 @@ async def test_pip_installer_rejects_when_download_cap_exceeded(tmp_path: Path) 
         process_runner=GrowingRunner(
             ProcessResult(returncode=0, stdout="ok", stderr="", timed_out=False),
         ),
-        settings=_settings(str(cache_dir), cap=5),
+        settings=_settings(cap=5),
     )
 
-    result = await installer.install("requests", "2.32.0")
+    result = await installer.install(RunJob("run-2", "requests", "2.32.0"))
 
     assert result.ok is False
     assert "download byte cap exceeded" in result.stderr
 
 
 async def test_pip_installer_rejects_failed_pip_invocation(tmp_path: Path) -> None:
-    cache_dir = tmp_path / "pip-cache"
-    cache_dir.mkdir()
     runner = FakeRunner(
         ProcessResult(returncode=2, stdout="x", stderr="pip failed", timed_out=False),
     )
     installer = RealPipInstaller(
         process_runner=runner,
-        settings=_settings(str(cache_dir), cap=10_000),
+        settings=_settings(cap=10_000),
     )
 
-    result = await installer.install("requests", "2.32.0")
+    result = await installer.install(RunJob("run-3", "requests", "2.32.0"))
 
     assert result.ok is False
     assert result.stderr == "pip failed"

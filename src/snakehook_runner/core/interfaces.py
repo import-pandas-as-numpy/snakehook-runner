@@ -54,11 +54,14 @@ class WebhookSummary:
     entrypoint: str | None
     module_name: str | None
     files_written: tuple[str, ...]
+    files_read: tuple[str, ...]
     network_connections: tuple[str, ...]
+    subprocesses: tuple[str, ...]
+    imports: tuple[str, ...]
 
 
 class PipInstaller(Protocol):
-    async def install(self, package_name: str, version: str) -> PipInstallResult:
+    async def install(self, job: RunJob) -> PipInstallResult:
         raise NotImplementedError
 
 

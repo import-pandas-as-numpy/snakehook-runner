@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-import os
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 import snakehook_runner.infra.nsjail_executor as nsjail_executor
 from snakehook_runner.core.config import Settings
@@ -39,25 +44,27 @@ def _settings() -> Settings:
         rlimit_cpu_sec=30,
         rlimit_as_mb=1024,
         cgroup_pids_max=128,
-        enable_cgroup_pids_limit=True,
+        cgroup_mem_max_bytes=1_073_741_824,
+        cgroup_cpu_ms_per_sec=800,
         rlimit_nofile=1024,
-        pip_cache_dir="/var/cache/pip",
         max_download_bytes=300_000_000,
         package_denylist=("torch",),
         dns_resolvers=("1.1.1.1",),
     )
 
 
-async def test_nsjail_command_contains_limits_and_readonly_cache_mount(monkeypatch) -> None:
-    original_exists = os.path.exists
+@pytest.fixture(autouse=True)
+def isolated_paths(monkeypatch, tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    code_root = tmp_path / "code"
+    work_root.mkdir()
+    code_root.mkdir()
+    monkeypatch.setenv("SNAKEHOOK_WORK_ROOT", str(work_root))
+    monkeypatch.setenv("SNAKEHOOK_CODE_ROOT", str(code_root))
+    monkeypatch.setattr(nsjail_executor, "_require_paths", lambda *paths: None)
 
-    def fake_exists(path: str) -> bool:
-        if path == "/opt/snakehook/work":
-            return True
-        return original_exists(path)
 
-    monkeypatch.setattr(nsjail_executor.os.path, "exists", fake_exists)
-
+async def test_nsjail_command_contains_limits_and_job_mount(tmp_path: Path) -> None:
     runner = FakeRunner()
     executor = NsJailSandboxExecutor(process_runner=runner, settings=_settings())
 
@@ -67,25 +74,30 @@ async def test_nsjail_command_contains_limits_and_readonly_cache_mount(monkeypat
     assert runner.command is not None
     command_text = " ".join(runner.command)
     assert "--time_limit 45" in command_text
-    assert "--user 65534" in command_text
-    assert "--group 65534" in command_text
-    assert "--disable_clone_newuser" in command_text
+    assert "--user 65534:65534:1" in command_text
+    assert "--group 65534:65534:1" in command_text
+    assert "--disable_clone_newuser" not in command_text
     assert "--rlimit_cpu 30" in command_text
     assert "--rlimit_as 1024" in command_text
+    assert "--rlimit_fsize 64" in command_text
     assert "--cgroup_pids_max 128" in command_text
+    assert "--cgroup_mem_max 1073741824" in command_text
+    assert "--cgroup_mem_swap_max 0" in command_text
+    assert "--cgroup_cpu_ms_per_sec 800" in command_text
+    assert "--use_cgroupv2" in command_text
     assert "--rlimit_nofile 1024" in command_text
     assert "--bindmount_ro /usr:/usr" in command_text
     assert "--bindmount_ro /usr/local:/usr/local" in command_text
     assert "--bindmount_ro /bin:/bin" in command_text
     assert "--bindmount_ro /lib:/lib" in command_text
-    assert "--bindmount /opt/snakehook/work:/opt/snakehook/work" in command_text
-    assert "--bindmount /tmp:/tmp" in command_text
-    assert "--bindmount_ro /var/cache/pip:/var/cache/pip" in command_text
+    assert "--bindmount " in command_text
+    assert f"--bindmount {tmp_path / 'work' / 'r1'}:/work" in command_text
+    assert f"--bindmount_ro {tmp_path / 'code' / 'r1'}:/site" in command_text
     assert "--env LD_LIBRARY_PATH=" in command_text
-    assert "--env PYTHONPATH=/opt/snakehook/work/site/sample-1.0" in command_text
+    assert "--env PYTHONPATH=/site" in command_text
     assert "/usr/local/bin/python3 -c" in command_text
     assert runner.env is not None
-    assert runner.env["PYTHONPATH"] == "/opt/snakehook/work/site/sample-1.0"
+    assert runner.env["PYTHONPATH"] == "/site"
 
 
 async def test_execute_mode_embeds_entrypoint_and_file_path() -> None:
@@ -130,17 +142,18 @@ async def test_execute_module_mode_embeds_module_name() -> None:
     assert "module_name='sample'" in command_text
 
 
-async def test_nsjail_command_skips_cgroup_pids_when_disabled() -> None:
+async def test_nsjail_command_always_applies_aggregate_cgroup_limits() -> None:
     runner = FakeRunner()
     settings = _settings()
-    settings = Settings(**{**settings.__dict__, "enable_cgroup_pids_limit": False})
     executor = NsJailSandboxExecutor(process_runner=runner, settings=settings)
 
     await executor.run(RunJob(run_id="r4", package_name="sample", version="1.0"))
 
     assert runner.command is not None
     command_text = " ".join(runner.command)
-    assert "--cgroup_pids_max" not in command_text
+    assert "--cgroup_pids_max" in command_text
+    assert "--cgroup_mem_max" in command_text
+    assert "--cgroup_cpu_ms_per_sec" in command_text
 
 
 def test_audit_code_emits_timestamp_args_and_caller_fields() -> None:
@@ -156,3 +169,58 @@ def test_audit_code_emits_timestamp_args_and_caller_fields() -> None:
     assert "except OSError" in source
     assert "caller_file=frame_info.get('file')" in source
     assert "if caller_file == '<string>'" in source
+
+
+def test_audit_code_captures_post_install_file_and_socket_activity(tmp_path: Path) -> None:
+    audit_path = tmp_path / "execute-audit.jsonl"
+    probe_path = tmp_path / "telemetry_probe.py"
+    probe_path.write_text(
+        "\n".join(
+            (
+                "import sys",
+                "with open('created.txt', 'w', encoding='utf-8') as target:",
+                "    target.write('payload')",
+                "with open('created.txt', encoding='utf-8') as target:",
+                "    target.read()",
+                "sys.audit('socket.connect', None, ('127.0.0.1', 443))",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    job = RunJob(
+        run_id="r-audit",
+        package_name="telemetry-probe",
+        version="1",
+        mode=RunMode.EXECUTE_MODULE,
+        module_name="telemetry_probe",
+    )
+    source = nsjail_executor._build_audit_code(job=job, audit_path=str(audit_path))
+
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    records = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    probe_records = [
+        record
+        for record in records
+        if str(record["caller"]["file"]).endswith("telemetry_probe.py")
+    ]
+    assert any(
+        record["event"] == "open" and "created.txt" in record["args"]
+        for record in probe_records
+    )
+    assert any(
+        record["event"] == "socket.connect" and "127.0.0.1" in record["args"]
+        for record in probe_records
+    )

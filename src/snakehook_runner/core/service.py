@@ -4,11 +4,11 @@ import logging
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 from snakehook_runner.core.interfaces import RunJob, RunMode
 from snakehook_runner.core.policy import is_denied_package
-from snakehook_runner.core.queue_gate import QueueGate
-from snakehook_runner.core.rate_limit import FixedWindowRateLimiter
+from snakehook_runner.core.queue_gate import QueueDecision
 
 LOG = logging.getLogger(__name__)
 
@@ -26,11 +26,19 @@ class SubmitResult:
     run_id: str | None
 
 
+class RateLimiter(Protocol):
+    def allow(self, key: str, now: float | None = None) -> bool: ...
+
+
+class SubmissionQueue(Protocol):
+    def submit(self, job: RunJob) -> QueueDecision: ...
+
+
 class SubmissionService:
     def __init__(
         self,
-        rate_limiter: FixedWindowRateLimiter,
-        queue_gate: QueueGate,
+        rate_limiter: RateLimiter,
+        queue_gate: SubmissionQueue,
         package_denylist: tuple[str, ...],
     ) -> None:
         self._rate_limiter = rate_limiter

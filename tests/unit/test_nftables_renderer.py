@@ -45,6 +45,21 @@ def test_write_rules_file_writes_expected_content(monkeypatch, tmp_path: Path) -
     assert "3.3.3.3" in text
 
 
+def test_write_analysis_hosts_file_contains_only_package_hosts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(nftables_renderer, "resolve_ipv4", lambda host: ["192.0.2.1"])
+    out = tmp_path / "hosts"
+
+    nftables_renderer.write_analysis_hosts_file(str(out))
+
+    text = out.read_text(encoding="utf-8")
+    assert "pypi.org" in text
+    assert "files.pythonhosted.org" in text
+    assert "discord" not in text
+
+
 def test_build_dns_resolver_allowlist_includes_system_resolvers(tmp_path: Path) -> None:
     resolv_conf = tmp_path / "resolv.conf"
     resolv_conf.write_text(
