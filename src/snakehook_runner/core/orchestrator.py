@@ -24,6 +24,10 @@ from snakehook_runner.core.interfaces import (
     WebhookClient,
     WebhookSummary,
 )
+from snakehook_runner.infra.artifact_io import (
+    is_regular_file,
+    open_regular_text,
+)
 from snakehook_runner.infra.compression import gzip_file
 from snakehook_runner.infra.runtime_paths import cleanup_job_dir
 
@@ -286,8 +290,8 @@ def _looks_like_nsjail_execve_failure(output: str) -> bool:
 def _existing_path(path: str | None) -> str | None:
     if not path:
         return None
-    if not Path(path).exists():
-        LOG.warning("triage audit telemetry not found path=%s", path)
+    if not is_regular_file(path):
+        LOG.warning("triage audit telemetry is missing or unsafe path=%s", path)
         return None
     return path
 
@@ -323,7 +327,11 @@ def _merge_audit_logs(output_path: str, sources: tuple[tuple[str, str], ...]) ->
     output = Path(output_path)
     with output.open("w", encoding="utf-8") as fout:
         for stage, source_path in sources:
-            with Path(source_path).open("r", encoding="utf-8", errors="replace") as fin:
+            with open_regular_text(
+                source_path,
+                encoding="utf-8",
+                errors="replace",
+            ) as fin:
                 for line in fin:
                     fout.write(f"{stage}:{line}")
 
@@ -401,7 +409,7 @@ def _collect_audit_highlights(*stage_paths: tuple[str, str | None]) -> AuditHigh
     for stage, path in stage_paths:
         if not path:
             continue
-        with Path(path).open("r", encoding="utf-8", errors="replace") as source:
+        with open_regular_text(path, encoding="utf-8", errors="replace") as source:
             for raw_line in source:
                 record = _parse_audit_record(raw_line)
                 if not record:

@@ -278,6 +278,37 @@ async def test_orchestrator_skips_missing_audit_file() -> None:
     assert webhook.calls[0][1] == ()
 
 
+async def test_orchestrator_rejects_symlink_audit_file(tmp_path: Path) -> None:
+    host_data = tmp_path / "host-data"
+    host_data.write_text("sensitive", encoding="utf-8")
+    audit = tmp_path / "execute-audit.jsonl"
+    audit.symlink_to(host_data)
+    webhook = FakeWebhookClient()
+    orch = TriageOrchestrator(
+        pip_installer=FakePipInstaller(PipInstallResult(ok=True, stdout="", stderr="")),
+        sandbox_executor=FakeSandboxExecutor(
+            SandboxResult(
+                ok=True,
+                stdout="",
+                stderr="",
+                timed_out=False,
+                audit_jsonl_path=str(audit),
+            ),
+        ),
+        webhook_client=webhook,
+    )
+
+    result = await orch.execute(
+        RunJob(run_id="r2c", package_name="x", version="1", mode=RunMode.EXECUTE),
+    )
+
+    assert result.ok is True
+    assert result.attachment_path is None
+    assert webhook.calls[0][1] == ()
+    assert host_data.read_text(encoding="utf-8") == "sensitive"
+    assert audit.is_symlink()
+
+
 async def test_worker_handler_logs_exceptions(caplog) -> None:
     class BoomOrchestrator:
         async def execute(self, job: RunJob):

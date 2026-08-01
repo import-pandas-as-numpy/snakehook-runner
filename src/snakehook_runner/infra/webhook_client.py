@@ -8,6 +8,7 @@ from typing import BinaryIO
 import httpx2 as httpx
 
 from snakehook_runner.core.interfaces import WebhookSummary
+from snakehook_runner.infra.artifact_io import open_regular_binary
 
 MAX_SUMMARY_CHARS = 1000
 MAX_FIELD_ITEMS = 10
@@ -29,9 +30,11 @@ class DiscordWebhookClient:
         files: dict[str, tuple[str, BinaryIO, str]] | None = None
         opened_handles: list[BinaryIO] = []
         for path in attachment_paths:
-            if not Path(path).exists():
+            try:
+                handle = open_regular_binary(path)
+            except OSError:
                 LOG.warning(
-                    "webhook attachment missing; skipping run_id=%s path=%s",
+                    "webhook attachment missing or unsafe; skipping run_id=%s path=%s",
                     summary.run_id,
                     path,
                 )
@@ -39,7 +42,6 @@ class DiscordWebhookClient:
             if files is None:
                 files = {}
             index = len(resolved_attachment_paths)
-            handle = open(path, "rb")
             opened_handles.append(handle)
             files[f"files[{index}]"] = (
                 Path(path).name,

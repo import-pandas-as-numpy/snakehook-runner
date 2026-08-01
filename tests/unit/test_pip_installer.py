@@ -160,8 +160,18 @@ def test_dir_size_handles_vanishing_file(monkeypatch, tmp_path: Path) -> None:
             raise FileNotFoundError
         return original_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "is_file", lambda self: self.suffix == ".bin")
     monkeypatch.setattr(Path, "stat", fake_stat)
+
+    assert _dir_size(root) == 3
+
+
+def test_dir_size_does_not_follow_symlinks(tmp_path: Path) -> None:
+    root = tmp_path / "pip-cache"
+    root.mkdir()
+    (root / "cached.bin").write_bytes(b"abc")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"sensitive")
+    (root / "linked.bin").symlink_to(outside)
 
     assert _dir_size(root) == 3
 
