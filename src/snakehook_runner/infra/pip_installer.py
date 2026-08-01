@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
 from pathlib import Path
 
 from snakehook_runner.core.config import Settings
@@ -153,12 +154,12 @@ def _dir_size(root: Path) -> int:
         return 0
     total = 0
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
         try:
-            total += path.stat().st_size
+            metadata = path.stat(follow_symlinks=False)
         except FileNotFoundError:
             continue
+        if stat.S_ISREG(metadata.st_mode):
+            total += metadata.st_size
     return total
 
 

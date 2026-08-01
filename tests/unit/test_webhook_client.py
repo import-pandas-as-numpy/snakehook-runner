@@ -140,3 +140,26 @@ async def test_webhook_client_posts_multiple_attachments(monkeypatch, tmp_path: 
     assert "`audit-report.html`" in embed["description"]
     assert files["files[0]"][2] == "application/gzip"
     assert files["files[1]"][2] == "text/html"
+
+
+async def test_webhook_client_skips_symlink_attachment(monkeypatch, tmp_path: Path) -> None:
+    created: list[FakeAsyncClient] = []
+
+    def fake_client(*, timeout: float):
+        client = FakeAsyncClient(timeout=timeout)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr("snakehook_runner.infra.webhook_client.httpx.AsyncClient", fake_client)
+    target = tmp_path / "host-data"
+    target.write_bytes(b"sensitive")
+    attachment = tmp_path / "audit.jsonl.gz"
+    attachment.symlink_to(target)
+
+    client = DiscordWebhookClient("https://discord.example/webhook")
+    await client.send_summary(_summary("r4"), (str(attachment),))
+
+    _, data, files = created[0].posts[0]
+    payload = json.loads(data["payload_json"])
+    assert "Attachments:" not in payload["embeds"][0]["description"]
+    assert files is None
