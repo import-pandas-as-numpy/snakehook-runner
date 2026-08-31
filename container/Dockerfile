@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM docker.io/library/python:3.13-slim-bookworm@sha256:9d7f287598e1a5a978c015ee176d8216435aaf335ed69ac3c38dd1bbb10e8d64 AS nsjail-builder
+FROM docker.io/library/python:3.14-slim-bookworm@sha256:416f0db2a2b561945630cef9877a7ea0581b27449eb9fd9df42f03e1b74b5b63 AS nsjail-builder
 
 ARG NSJAIL_REF=f78475530b46d0186111a9096b30725f816b55fe
 ARG PASTA_REF=a9c61ffaf15347b8dfcc2347c5440e4b0e82333b
@@ -49,7 +49,7 @@ RUN git submodule update --init --depth 1 \
     && git -C kafel apply /tmp/kafel-makefile.patch \
     && make -j"$(nproc)" PASTA_BIN_PATH=/tmp/passt/pasta
 
-FROM docker.io/library/python:3.13-slim-bookworm@sha256:9d7f287598e1a5a978c015ee176d8216435aaf335ed69ac3c38dd1bbb10e8d64 AS app-builder
+FROM docker.io/library/python:3.14-slim-bookworm@sha256:416f0db2a2b561945630cef9877a7ea0581b27449eb9fd9df42f03e1b74b5b63 AS app-builder
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/snakehook/venv
 
@@ -61,7 +61,7 @@ COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM docker.io/library/python:3.13-slim-bookworm@sha256:9d7f287598e1a5a978c015ee176d8216435aaf335ed69ac3c38dd1bbb10e8d64
+FROM docker.io/library/python:3.14-slim-bookworm@sha256:416f0db2a2b561945630cef9877a7ea0581b27449eb9fd9df42f03e1b74b5b63
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
