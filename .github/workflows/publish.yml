@@ -38,8 +38,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # frozen: v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # frozen: v4.2.0
-      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # frozen: v4.5.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # frozen: v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # frozen: v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -64,7 +64,7 @@ jobs:
           provenance: mode=max
           sbom: true
       - name: Attest published digest
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # frozen: v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # frozen: v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
